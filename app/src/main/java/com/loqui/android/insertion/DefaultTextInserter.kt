@@ -4,8 +4,12 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
- * Insertion strategy: copy first (guaranteed fallback), then try to paste into the
- * focused field through the accessibility service.
+ * Insertion strategy: copy first, then try the accessibility paste into the focused
+ * field.
+ *
+ * Copying first is deliberate — it costs nothing and guarantees that whatever happens
+ * next the transcript is on the clipboard. The caller renders [InsertResult.CopiedOnly]
+ * as "copied to clipboard", which is a normal outcome, not an error.
  */
 @Singleton
 class DefaultTextInserter @Inject constructor(
@@ -15,7 +19,7 @@ class DefaultTextInserter @Inject constructor(
 
     override suspend fun insert(text: String): InsertResult {
         clipboard.copy(text)
-        val pasted = accessibility.paste()
-        return if (pasted) InsertResult.Pasted else InsertResult.CopiedOnly
+        val outcome = accessibility.insert(text)
+        return if (outcome.inserted) InsertResult.Pasted else InsertResult.CopiedOnly
     }
 }

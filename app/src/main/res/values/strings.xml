@@ -63,9 +63,14 @@
 
     <!-- Permissions / onboarding -->
     <string name="onboarding_title">Set up Loqui</string>
-    <string name="onboarding_intro">Four permissions, each doing exactly one job. Nothing leaves your device unless you turn on cloud mode with your own key.</string>
+    <string name="onboarding_intro">Loqui needs the microphone, notifications and the floating bubble. Accessibility insertion is optional — without it your transcript goes to the clipboard.</string>
+    <string name="onboarding_required">Required</string>
+    <string name="onboarding_optional">Optional</string>
     <string name="onboarding_continue">Start using Loqui</string>
+    <string name="onboarding_skip">Not now</string>
     <string name="onboarding_back">Back</string>
+    <string name="onboarding_ready">All set — the bubble is ready to dictate into any app.</string>
+    <string name="onboarding_still_missing">You can finish setup later from the home screen. Until then dictation copies to the clipboard.</string>
     <string name="permission_granted">Granted</string>
     <string name="permission_missing">Not granted</string>
     <string name="permission_grant">Grant</string>
@@ -79,6 +84,7 @@
     <string name="permission_overlay_body">Shows the floating bubble on top of the app you are typing in.</string>
     <string name="permission_accessibility_title">Accessibility insertion</string>
     <string name="permission_accessibility_body">Optional. Pastes the transcript into the focused field; without it Loqui copies to the clipboard.</string>
+    <string name="permission_accessibility_steps">Settings › Accessibility › Loqui text insertion, then switch it on.</string>
 
     <!-- Capture states -->
     <string name="state_idle">Ready</string>
@@ -86,7 +92,15 @@
     <string name="state_processing">Working on it…</string>
     <string name="state_inserted">Inserted into the focused field</string>
     <string name="state_copied">Copied to clipboard — paste when ready</string>
+    <string name="state_copied_toast">No text field focused — transcript copied to clipboard</string>
     <string name="state_needs_key">Cloud mode needs your API key</string>
+
+    <!-- Bubble labels: short enough to sit under a floating disc -->
+    <string name="bubble_state_listening">Listening…</string>
+    <string name="bubble_state_processing">Working…</string>
+    <string name="bubble_state_inserted">Inserted</string>
+    <string name="bubble_state_copied">Copied</string>
+    <string name="bubble_state_needs_key">Add your key</string>
 
     <string name="capture_start_failed">Could not start capture.</string>
     <string name="capture_error_mic_permission">Microphone permission is missing.</string>

@@ -64,6 +64,9 @@ class VoiceInputService : Service() {
     lateinit var captureStateHolder: CaptureStateHolder
 
     @Inject
+    lateinit var captureFeedback: CaptureFeedback
+
+    @Inject
     @ApplicationScope
     lateinit var applicationScope: CoroutineScope
 
@@ -82,7 +85,7 @@ class VoiceInputService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_START_CAPTURE -> startCapture()
-            ACTION_CANCEL -> stopSelf()
+            ACTION_CANCEL -> cancelCapture()
             else -> Timber.w("VoiceInputService started without a known action")
         }
         return START_NOT_STICKY
@@ -90,6 +93,11 @@ class VoiceInputService : Service() {
 
     override fun onDestroy() {
         captureJob?.cancel()
+        // The session died with the service (explicit cancel or a system kill): never
+        // leave the bubble stuck on "Listening".
+        if (isSessionActive(captureStateHolder.state.value)) {
+            captureStateHolder.reset()
+        }
         serviceJob.cancel()
         if (isForeground) {
             ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
@@ -148,19 +156,16 @@ class VoiceInputService : Service() {
 
     private suspend fun handleSessionEvent(event: AsrSessionEvent) {
         when (event) {
-            AsrSessionEvent.NeedsKey -> captureStateHolder.update(CaptureState.NeedsKey)
-            is AsrSessionEvent.Failed -> captureStateHolder.update(
-                CaptureState.Error(describe(event.reason)),
-            )
-
+            AsrSessionEvent.NeedsKey -> publish(CaptureState.NeedsKey)
+            is AsrSessionEvent.Failed -> publish(CaptureState.Error(describe(event.reason)))
             is AsrSessionEvent.Transcript -> insert(event.text)
         }
     }
 
     private suspend fun insert(text: String) {
-        captureStateHolder.update(CaptureState.Processing)
+        publish(CaptureState.Processing)
         val result = textInserter.insert(text)
-        captureStateHolder.update(
+        publish(
             when (result) {
                 InsertResult.Pasted -> CaptureState.Inserted(InsertRoute.ACCESSIBILITY_PASTE)
                 InsertResult.CopiedOnly -> CaptureState.Copied(text)
@@ -169,6 +174,25 @@ class VoiceInputService : Service() {
         )
         Timber.i("Transcript inserted (%s, %d chars)", result, text.length)
     }
+
+    /** Publishes the state for the bubble and shows the matching toast at most once. */
+    private fun publish(state: CaptureState) {
+        captureStateHolder.update(state)
+        captureFeedback.report(state)
+    }
+
+    /**
+     * Second tap on the bubble (or a cancel intent): drop the job, tell the bubble the
+     * session is over, and release the microphone.
+     */
+    private fun cancelCapture() {
+        captureJob?.cancel()
+        captureStateHolder.reset()
+        stopSelf()
+    }
+
+    private fun isSessionActive(state: CaptureState): Boolean =
+        state == CaptureState.Listening || state == CaptureState.Processing
 
     /** Drops the foreground state and lets the bubble show the outcome for a moment. */
     private fun endSession() {

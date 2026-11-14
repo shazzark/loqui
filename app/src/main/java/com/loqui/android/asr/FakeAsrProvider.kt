@@ -10,7 +10,9 @@ import kotlinx.coroutines.flow.flow
  *
  * The ingested byte/frame counters let tests prove that audio really travelled from
  * the capture pipeline into the provider, rather than the provider inventing text
- * from an empty stream.
+ * from an empty stream. The canned sentence is deterministic on purpose: the Phase 3
+ * device check is "tap the bubble in Chrome, speak, and watch this sentence land in
+ * the focused field".
  */
 class FakeAsrProvider(
     override val mode: AsrMode,
@@ -23,6 +25,10 @@ class FakeAsrProvider(
         private set
 
     var ingestedBytes: Long = 0
+        private set
+
+    /** Completed dictations served by this instance; one transcript per session. */
+    var utterances: Int = 0
         private set
 
     override fun availability(): AsrAvailability = availability
@@ -49,6 +55,7 @@ class FakeAsrProvider(
             return@flow
         }
 
+        utterances++
         emit(AsrEvent.Partial(transcript.substringBefore(' ')))
         emit(AsrEvent.Final(transcript))
     }

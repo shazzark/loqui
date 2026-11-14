@@ -4,7 +4,9 @@ import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.loqui.android.capture.CaptureStateHolder
+import com.loqui.android.capture.DictationTap
 import com.loqui.android.capture.VoiceInputService
+import com.loqui.android.capture.dictationTapFor
 import com.loqui.android.core.Permissions
 import com.loqui.android.settings.AsrMode
 import com.loqui.android.settings.LlmMode
@@ -62,6 +64,18 @@ class HomeViewModel @Inject constructor(
         permissionState.value = Permissions.status(context)
     }
 
+    /**
+     * Called when the permission walkthrough closes. With the essentials in place the
+     * floating trigger starts immediately, so the next step is simply "open any app and
+     * tap the bubble".
+     */
+    fun onSetupFinished() {
+        refreshPermissions()
+        if (Permissions.status(context).essentialsGranted) {
+            startBubble()
+        }
+    }
+
     fun selectAsrMode(mode: AsrMode) {
         viewModelScope.launch { settingsRepository.setAsrMode(mode) }
     }
@@ -104,9 +118,13 @@ class HomeViewModel @Inject constructor(
         bubbleRunning.value = false
     }
 
+    /** Same toggle rule as the bubble: a second tap stops the running session. */
     fun startCapture() {
         if (!Permissions.hasMicrophone(context)) return
-        VoiceInputService.start(context)
+        when (dictationTapFor(captureStateHolder.state.value)) {
+            DictationTap.STOP -> VoiceInputService.cancel(context)
+            DictationTap.START -> VoiceInputService.start(context)
+        }
     }
 
     fun cancelCapture() {

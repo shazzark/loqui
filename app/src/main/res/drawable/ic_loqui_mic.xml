@@ -1,0 +1,27 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- Microphone capsule -->
+    <path
+        android:pathData="M54,32L54,58"
+        android:strokeColor="#FFFFFF"
+        android:strokeLineCap="round"
+        android:strokeWidth="12" />
+
+    <!-- Pickup arc -->
+    <path
+        android:pathData="M40,54 A14,14 0 0 0 68,54"
+        android:strokeColor="#FFFFFF"
+        android:strokeLineCap="round"
+        android:strokeWidth="6" />
+
+    <!-- Stand -->
+    <path
+        android:pathData="M54,70L54,78"
+        android:strokeColor="#FFFFFF"
+        android:strokeLineCap="round"
+        android:strokeWidth="6" />
+</vector>

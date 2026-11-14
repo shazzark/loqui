@@ -80,7 +80,24 @@ fun OnboardingScreen(
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            Spacer(Modifier.height(16.dp))
+            Spacer(Modifier.height(12.dp))
+            Text(
+                text = stringResource(
+                    if (uiState.permissions.essentialsGranted) {
+                        R.string.onboarding_ready
+                    } else {
+                        R.string.onboarding_still_missing
+                    },
+                ),
+                style = MaterialTheme.typography.bodySmall,
+                color = if (uiState.permissions.essentialsGranted) {
+                    MaterialTheme.colorScheme.primary
+                } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                },
+            )
+            Spacer(Modifier.height(20.dp))
+            SectionLabel(stringResource(R.string.onboarding_required))
 
             PermissionRow(
                 title = stringResource(R.string.permission_mic_title),
@@ -112,9 +129,13 @@ fun OnboardingScreen(
                 onAction = onOpenOverlaySettings,
             )
 
+            Spacer(Modifier.height(20.dp))
+            SectionLabel(stringResource(R.string.onboarding_optional))
+
             PermissionRow(
                 title = stringResource(R.string.permission_accessibility_title),
                 body = stringResource(R.string.permission_accessibility_body),
+                hint = stringResource(R.string.permission_accessibility_steps),
                 granted = uiState.permissions.accessibility,
                 actionLabel = stringResource(R.string.permission_open_settings),
                 onAction = onOpenAccessibilitySettings,
@@ -125,11 +146,29 @@ fun OnboardingScreen(
                 onClick = onDone,
                 modifier = Modifier.fillMaxWidth(),
             ) {
-                Text(stringResource(R.string.onboarding_continue))
+                Text(
+                    stringResource(
+                        if (uiState.permissions.essentialsGranted) {
+                            R.string.onboarding_continue
+                        } else {
+                            R.string.onboarding_skip
+                        },
+                    ),
+                )
             }
             Spacer(Modifier.height(24.dp))
         }
     }
+}
+
+@Composable
+private fun SectionLabel(text: String) {
+    Text(
+        text = text,
+        style = MaterialTheme.typography.titleSmall,
+        color = MaterialTheme.colorScheme.primary,
+        modifier = Modifier.padding(top = 4.dp, bottom = 4.dp),
+    )
 }
 
 @Composable
@@ -139,6 +178,7 @@ private fun PermissionRow(
     granted: Boolean,
     actionLabel: String,
     onAction: () -> Unit,
+    hint: String? = null,
 ) {
     Surface(
         modifier = Modifier
@@ -172,6 +212,14 @@ private fun PermissionRow(
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+            if (hint != null && !granted) {
+                Text(
+                    text = hint,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 4.dp),
+                )
+            }
             if (!granted) {
                 TextButton(onClick = onAction, modifier = Modifier.padding(top = 4.dp)) {
                     Text(actionLabel)

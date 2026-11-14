@@ -1,6 +1,7 @@
 package com.loqui.android.audio
 
 import android.Manifest
+import android.annotation.SuppressLint
 import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaRecorder
@@ -44,6 +45,11 @@ class AudioRecordPcmSource(
             .onFailure { Timber.w(it, "AudioRecord.release() failed") }
     }
 
+    /**
+     * The permission is declared on [start] and enforced by `VoiceInputService` before a
+     * session ever begins; lint cannot follow that gate into this helper.
+     */
+    @SuppressLint("MissingPermission")
     private fun buildRecorder(): AudioRecord {
         val minBufferBytes = AudioRecord.getMinBufferSize(
             sampleRateHz,

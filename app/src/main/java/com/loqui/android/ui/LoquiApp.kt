@@ -16,23 +16,37 @@ import com.loqui.android.ui.onboarding.OnboardingScreen
 
 /**
  * Two destinations: the home/settings screen and the permission walkthrough.
- * Phase 1 keeps navigation as local state — no navigation library is needed until
- * there are parameters or deep links to pass around.
+ *
+ * The walkthrough opens on launch while the essentials are missing, so a fresh
+ * install asks for the microphone, the overlay and (optionally) accessibility before
+ * the user is dropped into an app that cannot dictate. Phase 1 kept navigation as
+ * local state — no navigation library is needed without parameters or deep links.
  */
 @Composable
 fun LoquiApp() {
     val viewModel: HomeViewModel = viewModel()
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
 
-    var showSetup by rememberSaveable { mutableStateOf(false) }
+    // User opened setup explicitly, and "not now" respectively.
+    var setupRequested by rememberSaveable { mutableStateOf(false) }
+    var setupDismissed by rememberSaveable { mutableStateOf(false) }
+
+    val showSetup = setupRequested ||
+        (!uiState.permissions.essentialsGranted && !setupDismissed)
 
     // Overlay and accessibility live in system settings, so re-read on return.
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
         viewModel.refreshPermissions()
     }
 
+    val dismissSetup = {
+        setupRequested = false
+        setupDismissed = true
+        viewModel.onSetupFinished()
+    }
+
     BackHandler(enabled = showSetup) {
-        showSetup = false
+        dismissSetup()
     }
 
     if (showSetup) {
@@ -42,7 +56,7 @@ fun LoquiApp() {
             onOpenOverlaySettings = viewModel::openOverlaySettings,
             onOpenAccessibilitySettings = viewModel::openAccessibilitySettings,
             onOpenNotificationSettings = viewModel::openNotificationSettings,
-            onDone = { showSetup = false },
+            onDone = dismissSetup,
         )
     } else {
         HomeScreen(
@@ -55,7 +69,7 @@ fun LoquiApp() {
             onStartBubble = viewModel::startBubble,
             onStopBubble = viewModel::stopBubble,
             onStartCapture = viewModel::startCapture,
-            onOpenSetup = { showSetup = true },
+            onOpenSetup = { setupRequested = true },
             onOpenAppSettings = viewModel::openAppSettings,
             onOpenAccessibilitySettings = viewModel::openAccessibilitySettings,
         )

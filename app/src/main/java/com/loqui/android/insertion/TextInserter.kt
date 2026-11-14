@@ -10,14 +10,17 @@ enum class InsertRoute {
 }
 
 sealed interface InsertResult {
+    /** `ACTION_PASTE` or `ACTION_SET_TEXT` landed in the focused field. */
     data object Pasted : InsertResult
 
-    /** Text is on the clipboard; the user pastes it themselves. */
+    /** Text is on the clipboard; no field was focused, or insertion was refused. */
     data object CopiedOnly : InsertResult
 
+    /** Nothing could be done at all. Not expected in practice. */
     data object Unavailable : InsertResult
 }
 
 interface TextInserter {
+    /** Must never throw for expected conditions; every outcome is an [InsertResult]. */
     suspend fun insert(text: String): InsertResult
 }

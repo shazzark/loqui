@@ -18,9 +18,11 @@ import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
 import com.loqui.android.MainActivity
 import com.loqui.android.R
-import com.loqui.android.capture.CaptureState
+import com.loqui.android.capture.CaptureFeedback
 import com.loqui.android.capture.CaptureStateHolder
+import com.loqui.android.capture.DictationTap
 import com.loqui.android.capture.VoiceInputService
+import com.loqui.android.capture.dictationTapFor
 import dagger.hilt.android.AndroidEntryPoint
 import javax.inject.Inject
 import kotlinx.coroutines.CoroutineScope
@@ -45,6 +47,9 @@ class BubbleService : Service() {
 
     @Inject
     lateinit var captureStateHolder: CaptureStateHolder
+
+    @Inject
+    lateinit var captureFeedback: CaptureFeedback
 
     private val serviceJob = SupervisorJob()
     private val serviceScope = CoroutineScope(serviceJob + Dispatchers.Main.immediate)
@@ -102,33 +107,27 @@ class BubbleService : Service() {
     }
 
     private fun onBubbleTapped() {
-        Timber.d("Bubble tapped")
-        VoiceInputService.start(this)
+        when (dictationTapFor(captureStateHolder.state.value)) {
+            DictationTap.START -> {
+                Timber.d("Bubble tapped: starting capture")
+                VoiceInputService.start(this)
+            }
+
+            DictationTap.STOP -> {
+                Timber.d("Bubble tapped while busy: stopping capture")
+                VoiceInputService.cancel(this)
+            }
+        }
     }
 
     private fun observeState() {
         if (stateJob?.isActive == true) return
         stateJob = serviceScope.launch {
-            var lastTerminalState: CaptureState? = null
             captureStateHolder.state.collectLatest { state ->
                 bubbleController.render(state)
-                val message = messageFor(state)
-                if (message != null && state != lastTerminalState) {
-                    toast(message)
-                }
-                if (message != null) {
-                    lastTerminalState = state
-                }
+                captureFeedback.report(state)
             }
         }
-    }
-
-    private fun messageFor(state: CaptureState): String? = when (state) {
-        CaptureState.Idle, CaptureState.Listening, CaptureState.Processing -> null
-        is CaptureState.Inserted -> getString(R.string.state_inserted)
-        is CaptureState.Copied -> getString(R.string.state_copied)
-        CaptureState.NeedsKey -> getString(R.string.state_needs_key)
-        is CaptureState.Error -> state.message
     }
 
     private fun stopBubble() {
