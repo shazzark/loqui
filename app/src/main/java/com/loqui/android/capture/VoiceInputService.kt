@@ -26,6 +26,8 @@ import com.loqui.android.di.ApplicationScope
 import com.loqui.android.insertion.InsertResult
 import com.loqui.android.insertion.InsertRoute
 import com.loqui.android.insertion.TextInserter
+import com.loqui.android.llm.CorrectionOutcome
+import com.loqui.android.llm.LlmCoordinator
 import dagger.hilt.android.AndroidEntryPoint
 import javax.inject.Inject
 import kotlinx.coroutines.CancellationException
@@ -59,6 +61,9 @@ class VoiceInputService : Service() {
 
     @Inject
     lateinit var textInserter: TextInserter
+
+    @Inject
+    lateinit var llmCoordinator: LlmCoordinator
 
     @Inject
     lateinit var captureStateHolder: CaptureStateHolder
@@ -162,17 +167,38 @@ class VoiceInputService : Service() {
         }
     }
 
-    private suspend fun insert(text: String) {
+    /**
+     * Optional clean-up, then insertion.
+     *
+     * The state is already [CaptureState.Processing] before the corrector runs, so the
+     * bubble keeps its spinner. [LlmCoordinator] bounds the pass at one second and hands
+     * back the raw transcript whenever correction is off, unconfigured, slow or broken:
+     * insertion never waits on a model.
+     */
+    private suspend fun insert(transcript: String) {
         publish(CaptureState.Processing)
-        val result = textInserter.insert(text)
+
+        val correction = llmCoordinator.correctIfEnabled(transcript)
+        logCorrection(transcript, correction)
+
+        val result = textInserter.insert(correction.text)
         publish(
             when (result) {
                 InsertResult.Pasted -> CaptureState.Inserted(InsertRoute.ACCESSIBILITY_PASTE)
-                InsertResult.CopiedOnly -> CaptureState.Copied(text)
+                InsertResult.CopiedOnly -> CaptureState.Copied(correction.text)
                 InsertResult.Unavailable -> CaptureState.Error(getString(R.string.capture_error_generic))
             },
         )
-        Timber.i("Transcript inserted (%s, %d chars)", result, text.length)
+        Timber.i("Transcript inserted (%s, %d chars)", result, correction.text.length)
+    }
+
+    /** Lengths only: the transcript is never logged. */
+    private fun logCorrection(transcript: String, correction: CorrectionOutcome) {
+        if (correction.corrected) {
+            Timber.d("Clean-up applied (%d -> %d chars)", transcript.length, correction.text.length)
+        } else {
+            Timber.d("Clean-up skipped (%s); inserting the raw transcript", correction.skipped)
+        }
     }
 
     /** Publishes the state for the bubble and shows the matching toast at most once. */

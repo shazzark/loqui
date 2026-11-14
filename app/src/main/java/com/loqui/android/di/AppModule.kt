@@ -9,6 +9,8 @@ import com.loqui.android.audio.vad.VadConfig
 import com.loqui.android.audio.vad.VoiceActivityDetector
 import com.loqui.android.insertion.DefaultTextInserter
 import com.loqui.android.insertion.TextInserter
+import com.loqui.android.llm.DefaultLlmProviderFactory
+import com.loqui.android.llm.LlmProviderFactory
 import com.loqui.android.settings.DataStoreSettingsRepository
 import com.loqui.android.settings.KeystoreSecretStore
 import com.loqui.android.settings.SecretStore
@@ -85,4 +87,8 @@ abstract class AppBindingsModule {
     /** Phase 2: on-device fake plus the cloud scaffold, selected through the settings. */
     @Binds
     abstract fun bindAsrProviderFactory(impl: DefaultAsrProviderFactory): AsrProviderFactory
+
+    /** Phase 4: deterministic on-device clean-up plus the opt-in cloud scaffold. */
+    @Binds
+    abstract fun bindLlmProviderFactory(impl: DefaultLlmProviderFactory): LlmProviderFactory
 }

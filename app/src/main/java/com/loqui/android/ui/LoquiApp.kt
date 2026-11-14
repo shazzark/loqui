@@ -64,6 +64,8 @@ fun LoquiApp() {
             onSelectAsrMode = viewModel::selectAsrMode,
             onSaveCloudKey = viewModel::saveCloudKey,
             onRemoveCloudKey = viewModel::removeCloudKey,
+            onSaveLlmKey = viewModel::saveLlmKey,
+            onRemoveLlmKey = viewModel::removeLlmKey,
             onLlmEnabledChange = viewModel::setLlmEnabled,
             onLlmModeChange = viewModel::setLlmMode,
             onStartBubble = viewModel::startBubble,

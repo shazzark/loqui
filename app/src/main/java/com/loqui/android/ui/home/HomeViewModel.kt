@@ -34,29 +34,39 @@ class HomeViewModel @Inject constructor(
 ) : ViewModel() {
 
     private val permissionState = MutableStateFlow(Permissions.status(context))
-    private val cloudKeyPresent = MutableStateFlow(secretStore.hasKey(ProviderIds.CLOUD_ASR))
+    private val storedKeys = MutableStateFlow(
+        StoredKeys(
+            asr = secretStore.hasKey(ProviderIds.CLOUD_ASR),
+            llm = secretStore.hasKey(ProviderIds.CLOUD_LLM),
+        ),
+    )
     private val bubbleRunning = MutableStateFlow(false)
 
     val uiState: StateFlow<HomeUiState> = combine(
         settingsRepository.settings,
         permissionState,
-        cloudKeyPresent,
+        storedKeys,
         bubbleRunning,
         captureStateHolder.state,
-    ) { settings, permissions, hasKey, bubble, captureState ->
+    ) { settings, permissions, keys, bubble, captureState ->
         HomeUiState(
             asrMode = settings.asrMode,
             llmEnabled = settings.llmEnabled,
             llmMode = settings.llmMode,
             permissions = permissions,
-            hasCloudKey = hasKey,
+            hasCloudKey = keys.asr,
+            hasLlmKey = keys.llm,
             bubbleRunning = bubble,
             captureState = captureState,
         )
     }.stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS),
-        initialValue = HomeUiState(permissions = permissionState.value),
+        initialValue = HomeUiState(
+            permissions = permissionState.value,
+            hasCloudKey = storedKeys.value.asr,
+            hasLlmKey = storedKeys.value.llm,
+        ),
     )
 
     /** Call on every resume: the user changes these in system settings. */
@@ -94,14 +104,30 @@ class HomeViewModel @Inject constructor(
         if (key.isEmpty()) return false
 
         secretStore.writeKey(ProviderIds.CLOUD_ASR, key)
-        cloudKeyPresent.value = true
+        storedKeys.value = storedKeys.value.copy(asr = true)
         Timber.i("Cloud ASR key stored for this device")
         return true
     }
 
     fun removeCloudKey() {
         secretStore.deleteKey(ProviderIds.CLOUD_ASR)
-        cloudKeyPresent.value = false
+        storedKeys.value = storedKeys.value.copy(asr = false)
+    }
+
+    /** @return false when the input was blank, so the screen can keep the error visible. */
+    fun saveLlmKey(rawKey: String): Boolean {
+        val key = rawKey.trim()
+        if (key.isEmpty()) return false
+
+        secretStore.writeKey(ProviderIds.CLOUD_LLM, key)
+        storedKeys.value = storedKeys.value.copy(llm = true)
+        Timber.i("Cloud clean-up key stored for this device")
+        return true
+    }
+
+    fun removeLlmKey() {
+        secretStore.deleteKey(ProviderIds.CLOUD_LLM)
+        storedKeys.value = storedKeys.value.copy(llm = false)
     }
 
     fun startBubble() {
@@ -142,4 +168,7 @@ class HomeViewModel @Inject constructor(
     private companion object {
         const val STOP_TIMEOUT_MS = 5_000L
     }
+
+    /** Which provider keys are present, collapsed so the UI combine stays readable. */
+    private data class StoredKeys(val asr: Boolean, val llm: Boolean)
 }

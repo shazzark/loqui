@@ -52,9 +52,14 @@
 
     <string name="llm_toggle_title">Tidy up transcripts with a language model</string>
     <string name="llm_toggle_description">Off by default. Raw transcripts are inserted exactly as recognised.</string>
-    <string name="llm_phase_note">The setting is saved now; clean-up itself arrives in a later phase.</string>
+    <string name="llm_budget_note">Clean-up runs after recognition and is capped at 1 second. If it is slow, fails or has no key, the raw transcript is inserted.</string>
     <string name="llm_mode_on_device">On-device</string>
+    <string name="llm_mode_on_device_description">Local punctuation and capitalisation. No network, no key.</string>
     <string name="llm_mode_cloud">Cloud (your key)</string>
+    <string name="llm_mode_cloud_description">Sends the transcript to the model provider you choose, billed to your account.</string>
+    <string name="llm_key_missing_title">Add your key to use cloud clean-up</string>
+    <string name="llm_key_missing_body">Cloud clean-up posts the transcript straight from your device to the provider you picked, using your own credentials. Loqui never proxies or pays for these requests.</string>
+    <string name="llm_key_present">A key is stored for cloud clean-up.</string>
 
     <string name="insertion_accessibility_title">Accessibility insertion</string>
     <string name="insertion_accessibility_granted">Enabled: Loqui pastes into the focused field.</string>

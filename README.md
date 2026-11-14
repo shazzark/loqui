@@ -4,11 +4,13 @@ Loqui is a background-first voice input app: tap the floating bubble, speak, and
 transcript lands in whatever field is focused. Recognition runs on-device by default;
 cloud providers are strictly opt-in and use **the user's own API key**.
 
-This repository is **Phase 3: trigger + insertion UX**. The floating bubble shows
+This repository is **Phase 4: optional LLM correction**. The floating bubble shows
 idle/listening/processing/result states, a tap starts or stops the recording service,
 and the transcript is pasted into the focused field through the accessibility service —
-or lands on the clipboard with a toast when no field is focused. All of it with **zero
-API keys** and no network.
+or lands on the clipboard with a toast when no field is focused. An optional clean-up
+pass fixes punctuation and capitalisation, capped at **one second**; when it is off,
+slow, failing or has no key, the raw transcript is inserted. All of it with **zero API
+keys** and no network.
 
 ## Build
 
@@ -37,6 +39,8 @@ that is a bug.
 | Floating trigger | `trigger/BubbleService` + `BubbleController` | `specialUse` overlay service: draggable disc, tap toggles capture, never records audio or touches the network |
 | Bubble states | `trigger/BubbleAppearance` | Pure mapping `CaptureState` → accent, short label, spinner, pulse; the only `View` code lives in `BubbleController` |
 | Recognition | `asr/AsrCoordinator`, `asr/AsrProviderFactory` | `FakeAsrProvider` on-device until sherpa-onnx lands; `asr/cloud/CloudAsrProvider` for opt-in cloud, gated on the user's key |
+| Clean-up (optional) | `llm/LlmCoordinator`, `llm/LlmProviderFactory` | Off by default; `OnDeviceLlmCorrector` (deterministic punctuation) or `llm/cloud/CloudLlmCorrector`, hard-capped at 1 s — any skip inserts the raw transcript |
+| Prompt | `llm/LlmPrompt` | One reviewable instruction: fix punctuation, never add/remove words, reply with the text only |
 | Insertion | `insertion/DefaultTextInserter` | Always copies to clipboard first, then attempts an accessibility paste; clipboard is the guaranteed fallback |
 | Accessibility | `insertion/LoquiAccessibilityService` | Optional, user-enabled; `ACTION_PASTE` first, `ACTION_SET_TEXT` + `ACTION_SET_SELECTION` when paste is refused |
 | Insertion text math | `insertion/InsertionText` | Pure caret/selection planning, unit-tested without a device |
@@ -62,6 +66,10 @@ Design rules that later phases must not break:
    never leave a session running unattended.
 6. **One toast per outcome.** The bubble and the mic service both observe the final
    state; `MessageGate` collapses the duplicate so the user is told once.
+7. **Correction never gates insertion.** `LlmCoordinator` runs the corrector inside a
+   one-second `withTimeoutOrNull`, validates the answer and falls back to the raw
+   transcript on disable, missing key, failure, timeout or an empty answer. A model can
+   improve the text; it can never delay, block or delete a dictation.
 
 ## Tests
 
@@ -111,7 +119,40 @@ On a real device with the debug build (no key, no model):
 
 Until steps 3 and 5 are recorded here, the Phase 3 boxes in `04-phases.md` stay unticked.
 
-## Deliberate Phase 3 gaps
+## Tests: clean-up (Phase 4)
+
+`app/src/test/.../llm/` covers the correction pass:
+
+- `PunctuationCorrectionTest` — initial capital, terminal period, `,`/`;`/`:` become `.`,
+  existing `.!?…` are left alone, numbers and blank input stay untouched
+- `LlmCoordinatorTest` — switched off never builds a corrector, on-device fixes
+  punctuation with no key, cloud without a key keeps the raw text, cloud with a key uses
+  the model answer, a slow corrector is cancelled at exactly the 1 s budget, failures and
+  empty answers fall back to the raw text
+- `CloudLlmCorrectorTest` — `MissingKey` with no request made, the prompt carries the
+  transcript and never the key, rejections are not retried, the corrector enforces its
+  own timeout
+- `LlmProviderFactoryTest` — on-device corrector reused, cloud rebuilt per session so the
+  key is read at call time, `MissingKey` until a key is stored
+
+## Device check (Phase 4 exit criterion)
+
+On a real device with the debug build (no key, no model):
+
+1. Home screen → *Clean-up (optional)*: the toggle is off, and a dictation lands exactly
+   as recognised ("This is a Loqui test transcript.").
+2. Switch clean-up on with *On-device*: dictate "this is a loqui test transcript" and
+   confirm the field receives "This is a Loqui test transcript." — initial capital and a
+   period, nothing else changed.
+3. Select *Cloud (your key)* without storing a key: dictate again and confirm the raw
+   transcript is inserted, the "Add your key to use cloud clean-up" card is visible, and
+   nothing crashes.
+4. Time step 2 against step 1 and confirm insertion is no more than ~1 s later with
+   clean-up on.
+
+Until steps 2-4 are recorded here, the Phase 4 boxes in `04-phases.md` stay unticked.
+
+## Deliberate Phase 3-4 gaps
 
 - On-device recognition is still `FakeAsrProvider`; the sherpa-onnx engine lands with
   the model download work. The bubble, permissions, insertion and clipboard paths it
@@ -126,3 +167,9 @@ Until steps 3 and 5 are recorded here, the Phase 3 boxes in `04-phases.md` stay 
 - Bubble position is not persisted across service restarts, and there is no Compose UI
   test harness yet (no Robolectric), so the screen logic is covered through the pure
   state mappers instead.
+- The on-device corrector is deterministic punctuation, not a language model: it proves
+  the bounded clean-up path with no model download, and a real model slots in behind
+  `LlmCorrector` without touching the coordinator or the insertion path.
+- Cloud clean-up is complete except its transport: `MockCloudLlmTransport` performs no
+  network I/O, so an OpenAI/DeepSeek client drops in behind `LlmTransport` without
+  touching the coordinator, the prompt or the 1 s budget.

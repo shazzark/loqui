@@ -1,5 +1,6 @@
 package com.loqui.android.ui.home
 
+import androidx.annotation.StringRes
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -47,6 +48,8 @@ fun HomeScreen(
     onSelectAsrMode: (AsrMode) -> Unit,
     onSaveCloudKey: (String) -> Boolean,
     onRemoveCloudKey: () -> Unit,
+    onSaveLlmKey: (String) -> Boolean,
+    onRemoveLlmKey: () -> Unit,
     onLlmEnabledChange: (Boolean) -> Unit,
     onLlmModeChange: (LlmMode) -> Unit,
     onStartBubble: () -> Unit,
@@ -91,6 +94,8 @@ fun HomeScreen(
                 uiState = uiState,
                 onLlmEnabledChange = onLlmEnabledChange,
                 onLlmModeChange = onLlmModeChange,
+                onSaveLlmKey = onSaveLlmKey,
+                onRemoveLlmKey = onRemoveLlmKey,
             )
             InsertionSection(
                 uiState = uiState,
@@ -188,23 +193,31 @@ private fun AsrSection(
         if (uiState.asrMode == AsrMode.CLOUD) {
             Spacer(Modifier.height(12.dp))
             CloudKeyPanel(
+                missingTitle = R.string.cloud_key_missing_title,
+                missingBody = R.string.cloud_key_missing_body,
+                presentText = R.string.cloud_key_present,
                 hasKey = uiState.hasCloudKey,
-                onSaveCloudKey = onSaveCloudKey,
-                onRemoveCloudKey = onRemoveCloudKey,
+                onSaveKey = onSaveCloudKey,
+                onRemoveKey = onRemoveCloudKey,
             )
         }
     }
 }
 
 /**
- * First-class "add your key" state: cloud mode is never silently unavailable, the
+ * First-class "add your key" state: a cloud mode is never silently unavailable, the
  * user always sees why it needs their key and how to provide it.
+ *
+ * Shared by cloud recognition and cloud clean-up; only the explanatory strings differ.
  */
 @Composable
 private fun CloudKeyPanel(
+    @StringRes missingTitle: Int,
+    @StringRes missingBody: Int,
+    @StringRes presentText: Int,
     hasKey: Boolean,
-    onSaveCloudKey: (String) -> Boolean,
-    onRemoveCloudKey: () -> Unit,
+    onSaveKey: (String) -> Boolean,
+    onRemoveKey: () -> Unit,
 ) {
     var keyInput by rememberSaveable { mutableStateOf("") }
     var showEmptyError by remember { mutableStateOf(false) }
@@ -212,20 +225,20 @@ private fun CloudKeyPanel(
     Panel {
         if (hasKey) {
             Text(
-                text = stringResource(R.string.cloud_key_present),
+                text = stringResource(presentText),
                 style = MaterialTheme.typography.bodyLarge,
             )
-            TextButton(onClick = onRemoveCloudKey) {
+            TextButton(onClick = onRemoveKey) {
                 Text(stringResource(R.string.cloud_key_remove))
             }
         } else {
             Text(
-                text = stringResource(R.string.cloud_key_missing_title),
+                text = stringResource(missingTitle),
                 style = MaterialTheme.typography.titleSmall,
             )
             Spacer(Modifier.height(4.dp))
             Text(
-                text = stringResource(R.string.cloud_key_missing_body),
+                text = stringResource(missingBody),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -254,7 +267,7 @@ private fun CloudKeyPanel(
             Spacer(Modifier.height(8.dp))
             Button(
                 onClick = {
-                    val saved = onSaveCloudKey(keyInput)
+                    val saved = onSaveKey(keyInput)
                     showEmptyError = !saved
                     if (saved) keyInput = ""
                 },
@@ -277,6 +290,8 @@ private fun LlmSection(
     uiState: HomeUiState,
     onLlmEnabledChange: (Boolean) -> Unit,
     onLlmModeChange: (LlmMode) -> Unit,
+    onSaveLlmKey: (String) -> Boolean,
+    onRemoveLlmKey: () -> Unit,
 ) {
     Section(stringResource(R.string.section_llm)) {
         Row(
@@ -304,18 +319,32 @@ private fun LlmSection(
             Spacer(Modifier.height(8.dp))
             SelectableRow(
                 title = stringResource(R.string.llm_mode_on_device),
-                description = null,
+                description = stringResource(R.string.llm_mode_on_device_description),
                 selected = uiState.llmMode == LlmMode.ON_DEVICE,
                 onClick = { onLlmModeChange(LlmMode.ON_DEVICE) },
             )
             SelectableRow(
                 title = stringResource(R.string.llm_mode_cloud),
-                description = null,
+                description = stringResource(R.string.llm_mode_cloud_description),
                 selected = uiState.llmMode == LlmMode.CLOUD,
                 onClick = { onLlmModeChange(LlmMode.CLOUD) },
             )
+
+            if (uiState.llmMode == LlmMode.CLOUD) {
+                Spacer(Modifier.height(12.dp))
+                CloudKeyPanel(
+                    missingTitle = R.string.llm_key_missing_title,
+                    missingBody = R.string.llm_key_missing_body,
+                    presentText = R.string.llm_key_present,
+                    hasKey = uiState.hasLlmKey,
+                    onSaveKey = onSaveLlmKey,
+                    onRemoveKey = onRemoveLlmKey,
+                )
+            }
+
+            Spacer(Modifier.height(8.dp))
             Text(
-                text = stringResource(R.string.llm_phase_note),
+                text = stringResource(R.string.llm_budget_note),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
