@@ -1,0 +1,100 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Loqui</string>
+
+    <string name="accessibility_service_label">Loqui text insertion</string>
+    <string name="accessibility_service_description">Lets Loqui paste the transcript you just dictated into the text field you have focused. Loqui does not read screen content for any other purpose.</string>
+
+    <string name="notification_channel_capture">Voice capture</string>
+    <string name="notification_channel_capture_description">Shows while Loqui is recording your voice.</string>
+    <string name="notification_channel_bubble">Floating bubble</string>
+    <string name="notification_channel_bubble_description">Keeps the Loqui bubble available over other apps.</string>
+
+    <string name="capture_notification_title">Loqui is listening</string>
+    <string name="capture_notification_text">Tap to open Loqui</string>
+    <string name="bubble_notification_title">Loqui bubble is active</string>
+    <string name="bubble_notification_text">Tap the bubble in any app to dictate</string>
+
+    <string name="bubble_content_description">Dictate with Loqui</string>
+    <string name="bubble_stopped">Loqui bubble stopped</string>
+
+    <!-- Home screen -->
+    <string name="home_title">Loqui</string>
+    <string name="home_subtitle">Voice input that works in any app. On-device by default, your key if you opt in.</string>
+    <string name="home_dictate_now">Dictate now</string>
+    <string name="home_start_bubble">Start floating bubble</string>
+    <string name="home_stop_bubble">Stop floating bubble</string>
+    <string name="home_setup_action">Setup &amp; permissions</string>
+    <string name="home_setup_complete">All set: microphone, notifications, bubble and insertion are ready.</string>
+    <string name="home_setup_incomplete">Some permissions are still missing. Dictation will fall back to the clipboard.</string>
+
+    <string name="section_status">Status</string>
+    <string name="section_asr">Speech recognition</string>
+    <string name="section_cloud_key">Cloud key</string>
+    <string name="section_llm">Clean-up (optional)</string>
+    <string name="section_insertion">Insertion</string>
+
+    <string name="asr_mode_on_device">On-device</string>
+    <string name="asr_mode_on_device_description">Free, private, works offline. Model downloads in Phase 2.</string>
+    <string name="asr_mode_cloud">Cloud (your key)</string>
+    <string name="asr_mode_cloud_description">Sends audio to the provider you choose, billed to your account.</string>
+
+    <string name="cloud_key_missing_title">Add your key to use cloud recognition</string>
+    <string name="cloud_key_missing_body">Loqui ships with no provider key and no proxy. Cloud mode talks straight from your device to the provider you picked, using your own credentials.</string>
+    <string name="cloud_key_label">Provider API key</string>
+    <string name="cloud_key_placeholder">Paste your key</string>
+    <string name="cloud_key_save">Save key</string>
+    <string name="cloud_key_saved">Key stored on this device</string>
+    <string name="cloud_key_present">A key is stored for this device.</string>
+    <string name="cloud_key_remove">Remove key</string>
+    <string name="cloud_key_empty_error">Enter a key before saving.</string>
+    <string name="cloud_key_storage_note">Stored encrypted with the Android Keystore. Never uploaded anywhere except your provider.</string>
+
+    <string name="llm_toggle_title">Tidy up transcripts with a language model</string>
+    <string name="llm_toggle_description">Off by default. Raw transcripts are inserted exactly as recognised.</string>
+    <string name="llm_phase_note">The setting is saved now; clean-up itself arrives in a later phase.</string>
+    <string name="llm_mode_on_device">On-device</string>
+    <string name="llm_mode_cloud">Cloud (your key)</string>
+
+    <string name="insertion_accessibility_title">Accessibility insertion</string>
+    <string name="insertion_accessibility_granted">Enabled: Loqui pastes into the focused field.</string>
+    <string name="insertion_accessibility_denied">Not enabled: Loqui copies the transcript so you can paste it.</string>
+    <string name="insertion_clipboard_note">The clipboard fallback is always available and needs no permission.</string>
+
+    <!-- Permissions / onboarding -->
+    <string name="onboarding_title">Set up Loqui</string>
+    <string name="onboarding_intro">Four permissions, each doing exactly one job. Nothing leaves your device unless you turn on cloud mode with your own key.</string>
+    <string name="onboarding_continue">Start using Loqui</string>
+    <string name="onboarding_back">Back</string>
+    <string name="permission_granted">Granted</string>
+    <string name="permission_missing">Not granted</string>
+    <string name="permission_grant">Grant</string>
+    <string name="permission_open_settings">Open settings</string>
+
+    <string name="permission_mic_title">Microphone</string>
+    <string name="permission_mic_body">Records only while you dictate. Capture runs in a foreground service so you can switch apps mid-sentence.</string>
+    <string name="permission_notifications_title">Notifications</string>
+    <string name="permission_notifications_body">Required by Android to show the recording and bubble notifications.</string>
+    <string name="permission_overlay_title">Display over other apps</string>
+    <string name="permission_overlay_body">Shows the floating bubble on top of the app you are typing in.</string>
+    <string name="permission_accessibility_title">Accessibility insertion</string>
+    <string name="permission_accessibility_body">Optional. Pastes the transcript into the focused field; without it Loqui copies to the clipboard.</string>
+
+    <!-- Capture states -->
+    <string name="state_idle">Ready</string>
+    <string name="state_listening">Listening…</string>
+    <string name="state_processing">Working on it…</string>
+    <string name="state_inserted">Inserted into the focused field</string>
+    <string name="state_copied">Copied to clipboard — paste when ready</string>
+    <string name="state_needs_key">Cloud mode needs your API key</string>
+
+    <string name="capture_start_failed">Could not start capture.</string>
+    <string name="capture_error_mic_permission">Microphone permission is missing.</string>
+    <string name="capture_error_background_blocked">Android blocked background recording. Open Loqui and dictate from the app.</string>
+    <string name="capture_error_generic">Dictation failed. Try again.</string>
+
+    <string name="asr_error_network_timeout">The provider took too long to respond.</string>
+    <string name="asr_error_provider">The provider rejected the request. Check your key.</string>
+    <string name="asr_error_cancelled">Dictation cancelled.</string>
+    <string name="asr_error_model_missing">The on-device model is not downloaded yet.</string>
+</resources>
