@@ -19,10 +19,12 @@ import androidx.core.content.ContextCompat
 import com.loqui.android.MainActivity
 import com.loqui.android.R
 import com.loqui.android.capture.CaptureFeedback
+import com.loqui.android.capture.CaptureState
 import com.loqui.android.capture.CaptureStateHolder
 import com.loqui.android.capture.DictationTap
 import com.loqui.android.capture.VoiceInputService
 import com.loqui.android.capture.dictationTapFor
+import com.loqui.android.hardening.captureStartFailureMessage
 import dagger.hilt.android.AndroidEntryPoint
 import javax.inject.Inject
 import kotlinx.coroutines.CoroutineScope
@@ -110,7 +112,15 @@ class BubbleService : Service() {
         when (dictationTapFor(captureStateHolder.state.value)) {
             DictationTap.START -> {
                 Timber.d("Bubble tapped: starting capture")
-                VoiceInputService.start(this)
+                val failure = VoiceInputService.start(this)
+                if (failure != null) {
+                    // The state observer above renders this and CaptureFeedback toasts once,
+                    // so a refused start is visible instead of a tap that does nothing.
+                    Timber.w("Capture start refused: %s", failure)
+                    captureStateHolder.update(
+                        CaptureState.Error(getString(captureStartFailureMessage(failure))),
+                    )
+                }
             }
 
             DictationTap.STOP -> {

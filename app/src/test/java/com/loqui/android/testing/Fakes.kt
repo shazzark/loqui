@@ -30,6 +30,10 @@ class FakeSettingsRepository(
         state.value = state.value.copy(llmMode = mode)
     }
 
+    override suspend fun setAccessibilityDisclosureAccepted(accepted: Boolean) {
+        state.value = state.value.copy(accessibilityDisclosureAccepted = accepted)
+    }
+
     fun currentMode(): AsrMode = state.value.asrMode
 }
 

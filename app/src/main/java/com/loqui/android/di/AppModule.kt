@@ -11,6 +11,8 @@ import com.loqui.android.insertion.DefaultTextInserter
 import com.loqui.android.insertion.TextInserter
 import com.loqui.android.llm.DefaultLlmProviderFactory
 import com.loqui.android.llm.LlmProviderFactory
+import com.loqui.android.models.DeviceModelStorageProbe
+import com.loqui.android.models.ModelStorageProbe
 import com.loqui.android.settings.DataStoreSettingsRepository
 import com.loqui.android.settings.KeystoreSecretStore
 import com.loqui.android.settings.SecretStore
@@ -91,4 +93,8 @@ abstract class AppBindingsModule {
     /** Phase 4: deterministic on-device clean-up plus the opt-in cloud scaffold. */
     @Binds
     abstract fun bindLlmProviderFactory(impl: DefaultLlmProviderFactory): LlmProviderFactory
+
+    /** Phase 5: free-space check for the model download placeholder. */
+    @Binds
+    abstract fun bindModelStorageProbe(impl: DeviceModelStorageProbe): ModelStorageProbe
 }

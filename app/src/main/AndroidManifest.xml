@@ -11,6 +11,9 @@
     <!-- Floating trigger -->
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
 
+    <!-- Asked for explicitly, because some OEM power managers kill the bubble otherwise. -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+
     <application
         android:name=".LoquiApplication"
         android:allowBackup="false"

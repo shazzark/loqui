@@ -27,6 +27,8 @@ interface SettingsRepository {
     suspend fun setLlmEnabled(enabled: Boolean)
 
     suspend fun setLlmMode(mode: LlmMode)
+
+    suspend fun setAccessibilityDisclosureAccepted(accepted: Boolean)
 }
 
 @Singleton
@@ -54,16 +56,22 @@ class DataStoreSettingsRepository @Inject constructor(
         context.settingsDataStore.edit { it[Keys.LLM_MODE] = mode.storageValue }
     }
 
+    override suspend fun setAccessibilityDisclosureAccepted(accepted: Boolean) {
+        context.settingsDataStore.edit { it[Keys.ACCESSIBILITY_DISCLOSURE] = accepted }
+    }
+
     private fun Preferences.toSettings(): LoquiSettings = LoquiSettings(
         asrMode = AsrMode.fromStorage(this[Keys.ASR_MODE]),
         llmEnabled = this[Keys.LLM_ENABLED] ?: false,
         llmMode = LlmMode.fromStorage(this[Keys.LLM_MODE]),
+        accessibilityDisclosureAccepted = this[Keys.ACCESSIBILITY_DISCLOSURE] ?: false,
     )
 
     private object Keys {
         val ASR_MODE = stringPreferencesKey("asr.mode")
         val LLM_ENABLED = booleanPreferencesKey("llm.enabled")
         val LLM_MODE = stringPreferencesKey("llm.mode")
+        val ACCESSIBILITY_DISCLOSURE = booleanPreferencesKey("accessibility.disclosure.accepted")
     }
 }
 

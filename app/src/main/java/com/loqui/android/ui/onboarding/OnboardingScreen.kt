@@ -23,6 +23,10 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
@@ -31,6 +35,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import com.loqui.android.R
 import com.loqui.android.ui.home.HomeUiState
+import com.loqui.android.ui.privacy.AccessibilityDisclosureDialog
 
 /**
  * Permission walkthrough. Each row explains the one job its permission does; the
@@ -43,6 +48,8 @@ fun OnboardingScreen(
     onRefreshPermissions: () -> Unit,
     onOpenOverlaySettings: () -> Unit,
     onOpenAccessibilitySettings: () -> Unit,
+    onAcceptDisclosure: () -> Unit,
+    onOpenPrivacyPolicy: () -> Unit,
     onOpenNotificationSettings: () -> Unit,
     onDone: () -> Unit,
     modifier: Modifier = Modifier,
@@ -50,6 +57,20 @@ fun OnboardingScreen(
     val permissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission(),
     ) { onRefreshPermissions() }
+
+    // The Play disclosure is shown the first time the user reaches for accessibility.
+    var showDisclosure by rememberSaveable { mutableStateOf(false) }
+
+    if (showDisclosure) {
+        AccessibilityDisclosureDialog(
+            onAccept = {
+                showDisclosure = false
+                onAcceptDisclosure()
+                onOpenAccessibilitySettings()
+            },
+            onDecline = { showDisclosure = false },
+        )
+    }
 
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
         onRefreshPermissions()
@@ -138,7 +159,13 @@ fun OnboardingScreen(
                 hint = stringResource(R.string.permission_accessibility_steps),
                 granted = uiState.permissions.accessibility,
                 actionLabel = stringResource(R.string.permission_open_settings),
-                onAction = onOpenAccessibilitySettings,
+                onAction = {
+                    if (uiState.accessibilityDisclosureAccepted) {
+                        onOpenAccessibilitySettings()
+                    } else {
+                        showDisclosure = true
+                    }
+                },
             )
 
             Spacer(Modifier.height(24.dp))
@@ -155,6 +182,12 @@ fun OnboardingScreen(
                         },
                     ),
                 )
+            }
+            TextButton(
+                onClick = onOpenPrivacyPolicy,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text(stringResource(R.string.privacy_open_action))
             }
             Spacer(Modifier.height(24.dp))
         }

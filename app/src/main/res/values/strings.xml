@@ -117,4 +117,65 @@
     <string name="asr_error_cancelled">Dictation cancelled.</string>
     <string name="asr_error_model_missing">The on-device model is not downloaded yet.</string>
     <string name="asr_error_missing_key">Cloud mode needs your API key. Add it in Loqui settings.</string>
+
+    <!-- Phase 5: foreground-service hardening -->
+    <string name="capture_error_foreground_denied">Android refused to keep the microphone service running. Open Loqui and dictate from the app.</string>
+    <string name="capture_error_mic_revoked">Microphone access was revoked. Grant it again in system settings.</string>
+
+    <!-- Phase 5: battery optimisation -->
+    <string name="section_background">Background reliability</string>
+    <string name="battery_exempt_title">Battery optimisation is off for Loqui</string>
+    <string name="battery_exempt_body">Android will not throttle the bubble or cut a dictation when the screen turns off.</string>
+    <string name="battery_restricted_title">Battery optimisation may stop the bubble</string>
+    <string name="battery_restricted_body">Some devices kill the floating bubble or stop a dictation while the screen is off. Exempting Loqui keeps capture reliable in the background.</string>
+    <string name="battery_request_action">Allow background running</string>
+    <string name="battery_settings_action">Open battery settings</string>
+    <string name="battery_request_failed">This device has no exemption dialog. Pick Loqui in the battery list and choose “Unrestricted”.</string>
+    <string name="battery_optional_note">Optional. Everything still works with Loqui in the foreground.</string>
+
+    <!-- Phase 5: privacy policy -->
+    <string name="section_about">About</string>
+    <string name="privacy_open_action">Privacy policy</string>
+    <string name="privacy_title">Privacy policy</string>
+    <string name="privacy_version">Version %1$d · ships inside the app</string>
+    <string name="privacy_intro">Loqui is built so that dictation works without an account, a server or a key. This page describes exactly what leaves your phone and when.</string>
+    <string name="privacy_audio_title">Audio</string>
+    <string name="privacy_audio_body">Loqui records only while you dictate. The microphone service starts on a tap and stops at the end of the sentence, or as soon as you tap again. Nothing is recorded in the background and no audio is ever written to a file.</string>
+    <string name="privacy_on_device_title">Recognition stays on your phone</string>
+    <string name="privacy_on_device_body">On-device recognition is the default and needs no key: audio is processed on your phone and never uploaded. Loqui runs no server of its own.</string>
+    <string name="privacy_cloud_title">Cloud is your choice</string>
+    <string name="privacy_cloud_body">If you switch recognition to cloud, the audio for that dictation goes from your phone straight to the provider you chose, with your own key, under that provider’s terms. Nothing is routed through us.</string>
+    <string name="privacy_cleanup_title">Optional clean-up</string>
+    <string name="privacy_cleanup_body">Clean-up is off by default. On-device clean-up fixes punctuation on your phone without a network call. Cloud clean-up sends the transcript text — never audio — to your provider with your own key, and only while the toggle is on.</string>
+    <string name="privacy_logging_title">No transcripts stored or logged</string>
+    <string name="privacy_logging_body">There is no transcript history, no analytics SDK and no crash-reporting SDK. Logs record counts and durations only — never the words you spoke — and release builds ship no debug logging.</string>
+    <string name="privacy_keys_title">Your keys</string>
+    <string name="privacy_keys_body">Provider keys are encrypted with a key held in the Android Keystore. They never appear in logs, never ship in the APK and are only sent to the endpoint you selected. Remove a key at any time from the home screen.</string>
+    <string name="privacy_accessibility_title">Accessibility</string>
+    <string name="privacy_accessibility_body">The accessibility service has one job: pasting the transcript into the field you have focused. It does not read the screen for anything else, does not observe your typing and stores nothing. Without it, transcripts go to the clipboard instead.</string>
+    <string name="privacy_models_title">Models</string>
+    <string name="privacy_models_body">Speech models are downloaded at runtime, never bundled in the APK. A model is only offered after its license and checksum have been recorded, and nothing is downloaded without your tap.</string>
+    <string name="privacy_permissions_title">Permissions</string>
+    <string name="privacy_permissions_body">Microphone records, notifications show the required foreground notification, display-over-other-apps draws the bubble, battery exemption keeps it alive, accessibility inserts. Each is revocable in system settings and each has a fallback.</string>
+    <string name="privacy_changes_title">Changes</string>
+    <string name="privacy_changes_body">The policy ships with the build, so you always read the version that matches the app you installed. A hosted copy of this text is required for the Play Store listing before release.</string>
+
+    <!-- Phase 5: accessibility disclosure -->
+    <string name="disclosure_title">Enable accessibility insertion?</string>
+    <string name="disclosure_body">Android requires your permission before any app can use the accessibility API. Loqui uses it for one thing: inserting the transcript you just dictated into the text field you have focused.</string>
+    <string name="disclosure_bullets">• Reads only the focused text field, at the moment of insertion\n• Never reads other screens, keystrokes or passwords\n• Stores nothing and runs no background monitoring\n• Optional — without it the transcript is copied to the clipboard</string>
+    <string name="disclosure_accept">I understand — open accessibility settings</string>
+    <string name="disclosure_decline">Not now</string>
+
+    <!-- Phase 5: on-device model downloads (scaffold) -->
+    <string name="section_models">On-device model</string>
+    <string name="model_meta">About %1$s · %2$s license</string>
+    <string name="model_space_enough">%1$s free — enough for the download and its unpacked copy.</string>
+    <string name="model_space_short">%1$s free — %2$s short of the %3$s needed.</string>
+    <string name="model_space_unknown">Free space unavailable on this device.</string>
+    <string name="model_download_action">Download model</string>
+    <string name="model_placeholder_note">Scaffold only: the download lands with the sherpa-onnx engine. This build ships no model and makes no request.</string>
+    <string name="model_license_note">Downloaded at runtime, never bundled in the APK. License and checksum are recorded before a model is offered.</string>
+
+    <string name="about_version">Loqui %1$s</string>
 </resources>

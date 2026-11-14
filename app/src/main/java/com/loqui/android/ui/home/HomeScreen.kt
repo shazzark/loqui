@@ -36,10 +36,13 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import com.loqui.android.BuildConfig
 import com.loqui.android.R
 import com.loqui.android.capture.CaptureState
+import com.loqui.android.models.formatBytes
 import com.loqui.android.settings.AsrMode
 import com.loqui.android.settings.LlmMode
+import com.loqui.android.ui.privacy.AccessibilityDisclosureDialog
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -58,6 +61,10 @@ fun HomeScreen(
     onOpenSetup: () -> Unit,
     onOpenAppSettings: () -> Unit,
     onOpenAccessibilitySettings: () -> Unit,
+    onAcceptAccessibilityDisclosure: () -> Unit,
+    onRequestBatteryExemption: () -> Boolean,
+    onOpenBatterySettings: () -> Unit,
+    onOpenPrivacyPolicy: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Scaffold(
@@ -100,8 +107,16 @@ fun HomeScreen(
             InsertionSection(
                 uiState = uiState,
                 onOpenAccessibilitySettings = onOpenAccessibilitySettings,
+                onAcceptDisclosure = onAcceptAccessibilityDisclosure,
                 onOpenAppSettings = onOpenAppSettings,
             )
+            BatterySection(
+                uiState = uiState,
+                onRequestExemption = onRequestBatteryExemption,
+                onOpenBatterySettings = onOpenBatterySettings,
+            )
+            ModelDownloadsSection(uiState = uiState)
+            AboutSection(onOpenPrivacyPolicy = onOpenPrivacyPolicy)
             Spacer(Modifier.height(32.dp))
         }
     }
@@ -356,8 +371,24 @@ private fun LlmSection(
 private fun InsertionSection(
     uiState: HomeUiState,
     onOpenAccessibilitySettings: () -> Unit,
+    onAcceptDisclosure: () -> Unit,
     onOpenAppSettings: () -> Unit,
 ) {
+    // Play requires the prominent disclosure before the deep-link, and only once: the
+    // consent is stored, so later visits to settings are a settings change, not consent.
+    var showDisclosure by rememberSaveable { mutableStateOf(false) }
+
+    if (showDisclosure) {
+        AccessibilityDisclosureDialog(
+            onAccept = {
+                showDisclosure = false
+                onAcceptDisclosure()
+                onOpenAccessibilitySettings()
+            },
+            onDecline = { showDisclosure = false },
+        )
+    }
+
     Section(stringResource(R.string.section_insertion)) {
         Text(
             text = stringResource(R.string.insertion_accessibility_title),
@@ -378,7 +409,15 @@ private fun InsertionSection(
             modifier = Modifier.padding(top = 8.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            TextButton(onClick = onOpenAccessibilitySettings) {
+            TextButton(
+                onClick = {
+                    if (uiState.accessibilityDisclosureAccepted) {
+                        onOpenAccessibilitySettings()
+                    } else {
+                        showDisclosure = true
+                    }
+                },
+            ) {
                 Text(stringResource(R.string.permission_open_settings))
             }
             TextButton(onClick = onOpenAppSettings) {
@@ -387,6 +426,157 @@ private fun InsertionSection(
         }
         Text(
             text = stringResource(R.string.insertion_clipboard_note),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+/**
+ * Doze and OEM power managers kill background services; the card says so before the user
+ * discovers it mid-sentence, and offers the system exemption rather than a promise.
+ */
+@Composable
+private fun BatterySection(
+    uiState: HomeUiState,
+    onRequestExemption: () -> Boolean,
+    onOpenBatterySettings: () -> Unit,
+) {
+    var exemptionUnavailable by rememberSaveable { mutableStateOf(false) }
+
+    Section(stringResource(R.string.section_background)) {
+        Panel {
+            Text(
+                text = stringResource(
+                    if (uiState.batteryRestricted) {
+                        R.string.battery_restricted_title
+                    } else {
+                        R.string.battery_exempt_title
+                    },
+                ),
+                style = MaterialTheme.typography.titleSmall,
+            )
+            Spacer(Modifier.height(4.dp))
+            Text(
+                text = stringResource(
+                    if (uiState.batteryRestricted) {
+                        R.string.battery_restricted_body
+                    } else {
+                        R.string.battery_exempt_body
+                    },
+                ),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+
+            if (uiState.batteryRestricted) {
+                Row(
+                    modifier = Modifier.padding(top = 8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Button(onClick = { exemptionUnavailable = !onRequestExemption() }) {
+                        Text(stringResource(R.string.battery_request_action))
+                    }
+                    TextButton(onClick = onOpenBatterySettings) {
+                        Text(stringResource(R.string.battery_settings_action))
+                    }
+                }
+                if (exemptionUnavailable) {
+                    Text(
+                        text = stringResource(R.string.battery_request_failed),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.padding(top = 4.dp),
+                    )
+                }
+            }
+
+            Text(
+                text = stringResource(R.string.battery_optional_note),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 12.dp),
+            )
+        }
+    }
+}
+
+/**
+ * Scaffold for on-device model downloads: the catalogue entry, its license and the free
+ * space check are real; the button stays disabled until the sherpa-onnx engine and the
+ * downloader exist, so the screen never promises a download that cannot happen.
+ */
+@Composable
+private fun ModelDownloadsSection(uiState: HomeUiState) {
+    Section(stringResource(R.string.section_models)) {
+        Panel {
+            Text(text = uiState.model.displayName, style = MaterialTheme.typography.titleSmall)
+            Spacer(Modifier.height(4.dp))
+            Text(
+                text = stringResource(
+                    R.string.model_meta,
+                    formatBytes(uiState.model.approxBytes),
+                    uiState.model.license.displayName,
+                ),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(8.dp))
+            Text(
+                text = storageSummary(uiState),
+                style = MaterialTheme.typography.bodySmall,
+                color = if (uiState.storage.hasRoom) {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                } else {
+                    MaterialTheme.colorScheme.error
+                },
+            )
+            Spacer(Modifier.height(8.dp))
+            Button(onClick = {}, enabled = false) {
+                Text(stringResource(R.string.model_download_action))
+            }
+            Text(
+                text = stringResource(R.string.model_placeholder_note),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 8.dp),
+            )
+            Text(
+                text = stringResource(R.string.model_license_note),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 4.dp),
+            )
+        }
+    }
+}
+
+@Composable
+private fun storageSummary(uiState: HomeUiState): String {
+    val storage = uiState.storage
+    return when {
+        storage.freeBytes <= 0L -> stringResource(R.string.model_space_unknown)
+        storage.hasRoom -> stringResource(
+            R.string.model_space_enough,
+            formatBytes(storage.freeBytes),
+        )
+        else -> stringResource(
+            R.string.model_space_short,
+            formatBytes(storage.freeBytes),
+            formatBytes(storage.shortfallBytes),
+            formatBytes(storage.neededBytes),
+        )
+    }
+}
+
+@Composable
+private fun AboutSection(onOpenPrivacyPolicy: () -> Unit) {
+    Section(stringResource(R.string.section_about)) {
+        TextButton(onClick = onOpenPrivacyPolicy) {
+            Text(stringResource(R.string.privacy_open_action))
+        }
+        Text(
+            text = stringResource(R.string.about_version, BuildConfig.VERSION_NAME),
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )

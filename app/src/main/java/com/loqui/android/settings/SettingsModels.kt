@@ -31,6 +31,13 @@ data class LoquiSettings(
     val asrMode: AsrMode = AsrMode.ON_DEVICE,
     val llmEnabled: Boolean = false,
     val llmMode: LlmMode = LlmMode.ON_DEVICE,
+    /**
+     * The Play accessibility disclosure was accepted.
+     *
+     * Persisted so the dialog is shown once per install: a second trip to the
+     * accessibility settings is a settings change, not a new consent.
+     */
+    val accessibilityDisclosureAccepted: Boolean = false,
 )
 
 /** Identifiers used by the Keystore-backed secret store; one entry per provider. */

@@ -23,6 +23,9 @@ import com.loqui.android.asr.AsrSessionEvent
 import com.loqui.android.audio.AudioCaptureStream
 import com.loqui.android.audio.vad.SpeechEndpointer
 import com.loqui.android.di.ApplicationScope
+import com.loqui.android.hardening.CaptureStartFailure
+import com.loqui.android.hardening.captureStartFailureMessage
+import com.loqui.android.hardening.classifyCaptureStartFailure
 import com.loqui.android.insertion.InsertResult
 import com.loqui.android.insertion.InsertRoute
 import com.loqui.android.insertion.TextInserter
@@ -35,7 +38,9 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import timber.log.Timber
 
@@ -117,26 +122,27 @@ class VoiceInputService : Service() {
             return
         }
 
-        val canRecord = hasMicrophonePermission()
-        if (!goForeground(withMicrophoneType = canRecord)) {
-            captureStateHolder.update(
-                CaptureState.Error(getString(R.string.capture_error_background_blocked)),
-            )
+        // Android 14 refuses a `microphone` promotion without the grant, and a grant that
+        // was revoked must produce a message rather than a crash on the audio thread.
+        if (!hasMicrophonePermission()) {
+            Timber.w("Capture requested without RECORD_AUDIO")
+            publish(CaptureState.Error(getString(R.string.capture_error_mic_permission)))
             stopSelf()
             return
         }
 
-        if (!canRecord) {
-            Timber.w("Capture requested without RECORD_AUDIO")
-            captureStateHolder.update(
-                CaptureState.Error(getString(R.string.capture_error_mic_permission)),
-            )
-            endSession()
+        val promotionFailure = goForeground()
+        if (promotionFailure != null) {
+            // Never record without the foreground promotion: a blocked background start
+            // means the platform will cut the microphone anyway.
+            publish(CaptureState.Error(getString(captureStartFailureMessage(promotionFailure))))
+            stopSelf()
             return
         }
 
         captureJob = serviceScope.launch {
             captureStateHolder.update(CaptureState.Listening)
+            val permissionWatch = launch { watchMicrophonePermission() }
             try {
                 // Mic -> ring buffer -> VAD. The endpointer completes the flow at the
                 // utterance endpoint, which stops capture and releases the mic.
@@ -148,14 +154,37 @@ class VoiceInputService : Service() {
                 // Session cancelled (bubble stop, service destroy): not a failure.
                 Timber.d("Capture session cancelled")
                 throw cancellation
+            } catch (revoked: SecurityException) {
+                // Android 14+ takes the microphone off a running service by denying the
+                // next audio read; report it and let the session end cleanly.
+                Timber.w(revoked, "Microphone access lost while capturing")
+                publish(CaptureState.Error(getString(R.string.capture_error_mic_revoked)))
             } catch (throwable: Throwable) {
                 Timber.e(throwable, "Capture session failed")
-                captureStateHolder.update(
-                    CaptureState.Error(getString(R.string.capture_error_generic)),
-                )
+                publish(CaptureState.Error(getString(R.string.capture_error_generic)))
             } finally {
+                permissionWatch.cancel()
                 endSession()
             }
+        }
+    }
+
+    /**
+     * Ends the session as soon as the grant disappears.
+     *
+     * The system usually kills the app on revocation, but OEM builds that keep it alive
+     * would otherwise leave a dead microphone and a bubble stuck on "Listening". Polling a
+     * permission is cheap and only runs while a session is active.
+     */
+    private suspend fun watchMicrophonePermission() {
+        while (currentCoroutineContext().isActive) {
+            delay(PERMISSION_POLL_MS)
+            if (hasMicrophonePermission()) continue
+
+            Timber.w("RECORD_AUDIO revoked while capturing; ending the session")
+            publish(CaptureState.Error(getString(R.string.capture_error_mic_revoked)))
+            captureJob?.cancel()
+            return
         }
     }
 
@@ -237,11 +266,13 @@ class VoiceInputService : Service() {
     }
 
     /**
-     * @return false when the platform refuses the foreground promotion, in which
-     * case the caller must not start recording.
+     * Promotes the service to the `microphone` foreground type.
+     *
+     * @return null when the promotion succeeded, otherwise why Android refused it; the
+     * caller must not record without it.
      */
-    private fun goForeground(withMicrophoneType: Boolean): Boolean {
-        val type = if (withMicrophoneType && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+    private fun goForeground(): CaptureStartFailure? {
+        val type = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
         } else {
             0
@@ -250,10 +281,12 @@ class VoiceInputService : Service() {
         return try {
             ServiceCompat.startForeground(this, NOTIFICATION_ID, buildNotification(), type)
             isForeground = true
-            true
+            null
         } catch (throwable: Throwable) {
             Timber.e(throwable, "Foreground promotion for capture failed")
-            false
+            // Android 12+ reports a blocked background start as IllegalStateException;
+            // Android 14 reports a refused service type as SecurityException.
+            classifyCaptureStartFailure(throwable, hasMicrophonePermission())
         }
     }
 
@@ -315,11 +348,32 @@ class VoiceInputService : Service() {
         private const val REQUEST_OPEN_APP = 0
         private const val OUTCOME_VISIBLE_MS = 4_000L
 
-        /** Starts a dictation session; the service owns the microphone itself. */
-        fun start(context: Context) {
+        /** How often a running session re-checks the microphone grant. */
+        private const val PERMISSION_POLL_MS = 500L
+
+        /**
+         * Starts a dictation session; the service owns the microphone itself.
+         *
+         * `startForegroundService` throws when Android refuses the start — most often a
+         * background start on 12+, or a missing `FOREGROUND_SERVICE_MICROPHONE` grant on
+         * 14+. The failure is returned instead of swallowed so the bubble and the in-app
+         * button can explain the silent no-op.
+         *
+         * @return null when the start was accepted, otherwise the classified reason.
+         */
+        fun start(context: Context): CaptureStartFailure? = try {
             val intent = Intent(context, VoiceInputService::class.java)
                 .setAction(ACTION_START_CAPTURE)
             ContextCompat.startForegroundService(context, intent)
+            null
+        } catch (throwable: Throwable) {
+            val hasMicrophone = ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.RECORD_AUDIO,
+            ) == PackageManager.PERMISSION_GRANTED
+            val failure = classifyCaptureStartFailure(throwable, hasMicrophone)
+            Timber.w(throwable, "Capture start refused: %s", failure)
+            failure
         }
 
         fun cancel(context: Context) {
