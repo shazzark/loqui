@@ -56,3 +56,13 @@ Design rules that Phase 2 must not break:
 - cloud mode without a key reports `NeedsKey` and produces no transcript
 - cloud mode with a user key transcribes through that provider
 - `availability()` reports `MissingKey` exactly when a cloud mode lacks a key
+
+## Deliberate Phase 1 gaps
+
+- `AsrProviderFactory` binds `FakeAsrProviderFactory`, so selections are real but
+  recognition is synthetic. Phase 2 swaps in the on-device engine and the real cloud
+  client.
+- No `android.permission.INTERNET` in the manifest yet: Phase 1 makes no requests, and
+  the permission should land with the cloud client that actually uses it.
+- No audio source yet (`AsrFrameStreams.phaseOneSilence`): the capture pipeline, state
+  machine and insertion path are complete, only the samples are silent.
