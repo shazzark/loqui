@@ -97,4 +97,5 @@
     <string name="asr_error_provider">The provider rejected the request. Check your key.</string>
     <string name="asr_error_cancelled">Dictation cancelled.</string>
     <string name="asr_error_model_missing">The on-device model is not downloaded yet.</string>
+    <string name="asr_error_missing_key">Cloud mode needs your API key. Add it in Loqui settings.</string>
 </resources>

@@ -40,6 +40,9 @@ enum class AsrFailure {
     PROVIDER_ERROR,
     CANCELLED,
     MODEL_UNAVAILABLE,
+
+    /** Cloud mode selected and no user key is stored. Rendered as the "add your key" state. */
+    MISSING_KEY,
 }
 
 interface AsrProvider {

@@ -1,7 +1,12 @@
 package com.loqui.android.di
 
 import com.loqui.android.asr.AsrProviderFactory
-import com.loqui.android.asr.FakeAsrProviderFactory
+import com.loqui.android.asr.DefaultAsrProviderFactory
+import com.loqui.android.audio.AudioRecordPcmSource
+import com.loqui.android.audio.PcmAudioSourceFactory
+import com.loqui.android.audio.vad.EnergyVad
+import com.loqui.android.audio.vad.VadConfig
+import com.loqui.android.audio.vad.VoiceActivityDetector
 import com.loqui.android.insertion.DefaultTextInserter
 import com.loqui.android.insertion.TextInserter
 import com.loqui.android.settings.DataStoreSettingsRepository
@@ -40,6 +45,32 @@ object DispatchersModule {
 
 @Module
 @InstallIn(SingletonComponent::class)
+object AudioModule {
+
+    /**
+     * Endpointing defaults: 20 ms frames, 60 ms of speech to start an utterance and
+     * 800 ms of silence to end it.
+     */
+    @Provides
+    @Singleton
+    fun provideVadConfig(): VadConfig = VadConfig()
+
+    /** Swappable detector: an energy baseline now, Silero ONNX once models ship. */
+    @Provides
+    fun provideVoiceActivityDetector(config: VadConfig): VoiceActivityDetector =
+        EnergyVad(config.speechRmsThreshold)
+
+    /**
+     * The microphone is only ever opened through this factory; the permission gate
+     * lives in `VoiceInputService` before capture is started.
+     */
+    @Provides
+    fun providePcmAudioSourceFactory(): PcmAudioSourceFactory =
+        PcmAudioSourceFactory { AudioRecordPcmSource() }
+}
+
+@Module
+@InstallIn(SingletonComponent::class)
 abstract class AppBindingsModule {
 
     @Binds
@@ -51,7 +82,7 @@ abstract class AppBindingsModule {
     @Binds
     abstract fun bindTextInserter(impl: DefaultTextInserter): TextInserter
 
-    /** Phase 1 uses the fake recognizer; Phase 2 swaps in the real factory. */
+    /** Phase 2: on-device fake plus the cloud scaffold, selected through the settings. */
     @Binds
-    abstract fun bindAsrProviderFactory(impl: FakeAsrProviderFactory): AsrProviderFactory
+    abstract fun bindAsrProviderFactory(impl: DefaultAsrProviderFactory): AsrProviderFactory
 }

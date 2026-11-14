@@ -1,7 +1,8 @@
 package com.loqui.android.asr
 
+import com.loqui.android.asr.cloud.CloudAsrProvider
+import com.loqui.android.asr.cloud.MockCloudAsrTransport
 import com.loqui.android.settings.AsrMode
-import com.loqui.android.settings.ProviderIds
 import com.loqui.android.settings.SecretStore
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -17,18 +18,20 @@ interface AsrProviderFactory {
     fun cloud(): AsrProvider
 }
 
+/**
+ * Phase 2 selection: on-device stays the [FakeAsrProvider] stand-in until the
+ * sherpa-onnx recognizer lands, while cloud is the real [CloudAsrProvider] wired to
+ * a mock transport.
+ */
 @Singleton
-class FakeAsrProviderFactory @Inject constructor(
+class DefaultAsrProviderFactory @Inject constructor(
     private val secretStore: SecretStore,
 ) : AsrProviderFactory {
 
     override fun onDevice(): AsrProvider = FakeAsrProvider(mode = AsrMode.ON_DEVICE)
 
-    override fun cloud(): AsrProvider = FakeAsrProvider(
-        mode = AsrMode.CLOUD,
-        availability = when {
-            secretStore.hasKey(ProviderIds.CLOUD_ASR) -> AsrAvailability.Ready
-            else -> AsrAvailability.MissingKey
-        },
+    override fun cloud(): AsrProvider = CloudAsrProvider(
+        secretStore = secretStore,
+        transport = MockCloudAsrTransport(),
     )
 }

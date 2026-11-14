@@ -19,14 +19,16 @@ import com.loqui.android.MainActivity
 import com.loqui.android.R
 import com.loqui.android.asr.AsrCoordinator
 import com.loqui.android.asr.AsrFailure
-import com.loqui.android.asr.AsrFrameStreams
 import com.loqui.android.asr.AsrSessionEvent
+import com.loqui.android.audio.AudioCaptureStream
+import com.loqui.android.audio.vad.SpeechEndpointer
 import com.loqui.android.di.ApplicationScope
 import com.loqui.android.insertion.InsertResult
 import com.loqui.android.insertion.InsertRoute
 import com.loqui.android.insertion.TextInserter
 import dagger.hilt.android.AndroidEntryPoint
 import javax.inject.Inject
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -40,14 +42,20 @@ import timber.log.Timber
  * UI) and runs as a `microphone` foreground service so capture survives the user
  * switching apps.
  *
- * Phase 1 wires the full path — permission gate, foreground notification, ASR
- * hand-off, insertion, state reporting — with a silent fake audio source.
+ * Phase 2 wires the real capture path: `AudioRecord` at 16 kHz mono PCM-16 into a
+ * ring buffer, VAD endpointing, then the ASR provider selected by settings.
  */
 @AndroidEntryPoint
 class VoiceInputService : Service() {
 
     @Inject
     lateinit var asrCoordinator: AsrCoordinator
+
+    @Inject
+    lateinit var audioCaptureStream: AudioCaptureStream
+
+    @Inject
+    lateinit var speechEndpointer: SpeechEndpointer
 
     @Inject
     lateinit var textInserter: TextInserter
@@ -117,9 +125,16 @@ class VoiceInputService : Service() {
         captureJob = serviceScope.launch {
             captureStateHolder.update(CaptureState.Listening)
             try {
-                asrCoordinator.transcribe(AsrFrameStreams.phaseOneSilence()).collect { event ->
+                // Mic -> ring buffer -> VAD. The endpointer completes the flow at the
+                // utterance endpoint, which stops capture and releases the mic.
+                val utterance = speechEndpointer.segment(audioCaptureStream.frames())
+                asrCoordinator.transcribe(utterance).collect { event ->
                     handleSessionEvent(event)
                 }
+            } catch (cancellation: CancellationException) {
+                // Session cancelled (bubble stop, service destroy): not a failure.
+                Timber.d("Capture session cancelled")
+                throw cancellation
             } catch (throwable: Throwable) {
                 Timber.e(throwable, "Capture session failed")
                 captureStateHolder.update(
@@ -238,6 +253,7 @@ class VoiceInputService : Service() {
         AsrFailure.PROVIDER_ERROR -> getString(R.string.asr_error_provider)
         AsrFailure.CANCELLED -> getString(R.string.asr_error_cancelled)
         AsrFailure.MODEL_UNAVAILABLE -> getString(R.string.asr_error_model_missing)
+        AsrFailure.MISSING_KEY -> getString(R.string.asr_error_missing_key)
     }
 
     companion object {
