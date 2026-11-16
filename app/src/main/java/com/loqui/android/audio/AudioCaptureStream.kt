@@ -4,6 +4,7 @@ import android.annotation.SuppressLint
 import com.loqui.android.asr.AudioFrame
 import com.loqui.android.audio.vad.Pcm16Signal
 import com.loqui.android.di.IoDispatcher
+import java.util.concurrent.atomic.AtomicBoolean
 import javax.inject.Inject
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.currentCoroutineContext
@@ -24,11 +25,31 @@ import timber.log.Timber
  * The flow owns the microphone for exactly as long as it is collected: the source
  * is released in `finally`, so cancelling the session (bubble stop, service
  * destroy) always releases the mic.
+ *
+ * [stop] is the third way out and the one a user's second tap uses: it ends the flow
+ * *normally* after the current frame, so the endpointer and the recogniser still get to
+ * flush what was already spoken. Cancelling the collector instead throws the utterance
+ * away — which is why a manual stop used to lose the transcript.
  */
 class AudioCaptureStream @Inject constructor(
     private val sourceFactory: PcmAudioSourceFactory,
     @IoDispatcher private val ioDispatcher: CoroutineDispatcher,
 ) {
+
+    private val stopRequested = AtomicBoolean(false)
+
+    /**
+     * Asks the running capture to finish after the current frame.
+     *
+     * The flow completes as if the microphone had ended, so the utterance reaches the
+     * recogniser instead of being cancelled. Idempotent, and reset when a new session
+     * starts collecting [frames].
+     */
+    fun stop() {
+        if (!stopRequested.getAndSet(true)) {
+            Timber.d("Capture stop requested; closing the microphone after the current frame")
+        }
+    }
 
     /**
      * The caller must hold `RECORD_AUDIO`; [com.loqui.android.capture.VoiceInputService]
@@ -36,6 +57,7 @@ class AudioCaptureStream @Inject constructor(
      */
     @SuppressLint("MissingPermission")
     fun frames(): Flow<AudioFrame> = flow {
+        stopRequested.set(false)
         val ring = AudioRingBuffer(RING_CAPACITY_BYTES)
         val source = sourceFactory.create()
         val chunk = ByteArray(READ_CHUNK_BYTES)
@@ -47,7 +69,7 @@ class AudioCaptureStream @Inject constructor(
             source.start()
             Timber.d("Microphone opened: %d Hz mono PCM-16", sampleRateHz)
 
-            while (currentCoroutineContext().isActive) {
+            while (currentCoroutineContext().isActive && !stopRequested.get()) {
                 val read = source.read(chunk, 0, chunk.size)
                 if (read <= 0) {
                     Timber.w("Microphone read returned %d; ending capture", read)
@@ -84,10 +106,11 @@ class AudioCaptureStream @Inject constructor(
             // One line per session with the loudest frame that was ever delivered: a peak
             // below the VAD gate means the microphone never gave the gate a chance.
             Timber.d(
-                "Microphone released after %d frames (%d ms), peak RMS %.4f",
+                "Microphone released after %d frames (%d ms), peak RMS %.4f%s",
                 frames,
                 frames * FRAME_MS,
                 peakRms,
+                if (stopRequested.get()) ", stopped by the user" else "",
             )
         }
     }.flowOn(ioDispatcher)

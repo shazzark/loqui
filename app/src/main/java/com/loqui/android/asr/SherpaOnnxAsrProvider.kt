@@ -158,13 +158,18 @@ class SherpaOnnxAsrProvider @Inject constructor(
                 }
 
                 if (finalText.isEmpty()) {
+                    // Audio was fed to the model and it recognised nothing: that is "no
+                    // speech detected", not a broken provider. The user cannot act on a
+                    // PROVIDER_ERROR here, and the session is the same shape as a silent
+                    // utterance that the endpointer closed on purpose.
                     Timber.w(
-                        "Recogniser produced no text from %d frames (%d ms, %d partials)",
+                        "Recogniser produced no text from %d frames (%d ms, %d partials); " +
+                            "reporting NO_SPEECH",
                         frames,
                         millisFor(samples),
                         partials,
                     )
-                    emit(AsrEvent.Failure(AsrFailure.PROVIDER_ERROR))
+                    emit(AsrEvent.Failure(AsrFailure.NO_SPEECH))
                 } else {
                     Timber.d(
                         "Final transcript: %d chars from %d frames (%d ms)",

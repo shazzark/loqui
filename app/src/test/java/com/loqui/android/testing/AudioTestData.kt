@@ -2,10 +2,13 @@ package com.loqui.android.testing
 
 import com.loqui.android.asr.AudioFrame
 
-/** Amplitude that sits well above the default VAD threshold (~0.18 RMS). */
+/** Amplitude that sits well above the VAD gate (~0.18 RMS). */
 const val SPEECH_AMPLITUDE = 6_000
 
-/** Amplitude that sits well below the default VAD threshold (~0.00006 RMS). */
+/**
+ * Quiet-room amplitude (~0.00006 RMS): below the lowest gate the calibrated VAD can
+ * produce ([com.loqui.android.audio.vad.VadConfig.MIN_SPEECH_RMS]).
+ */
 const val QUIET_AMPLITUDE = 2
 
 /** 20 ms of 16 kHz mono PCM-16. */

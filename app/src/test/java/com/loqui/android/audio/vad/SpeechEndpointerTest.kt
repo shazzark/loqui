@@ -17,14 +17,16 @@ class SpeechEndpointerTest {
     /** Tight timings so each case stays readable: 60 ms onset, 100 ms hangover. */
     private val config = VadConfig(
         frameDurationMs = 20,
-        speechRmsThreshold = 0.02f,
+        minSpeechRmsThreshold = 0.02f,
+        maxSpeechRmsThreshold = 0.5f,
+        calibrationMs = 0,
         onsetFrames = 3,
         silenceHangoverFrames = 5,
         maxUtteranceMs = 1_000,
     )
 
     private fun endpointer(config: VadConfig = this.config) =
-        SpeechEndpointer(config, EnergyVad(config.speechRmsThreshold))
+        SpeechEndpointer(config, EnergyVad(config))
 
     private fun speech(count: Int = 1) = List(count) { audioFrame(SPEECH_AMPLITUDE) }
 
@@ -32,7 +34,7 @@ class SpeechEndpointerTest {
 
     @Test
     fun `energy detection separates speech from quiet and from silence`() {
-        val detector = EnergyVad(config.speechRmsThreshold)
+        val detector = EnergyVad(config)
 
         assertTrue(detector.isSpeech(audioFrame(SPEECH_AMPLITUDE)))
         assertFalse(detector.isSpeech(audioFrame(QUIET_AMPLITUDE)))
@@ -135,11 +137,19 @@ class SpeechEndpointerTest {
         assertEquals(8_000, defaults.noSpeechTimeoutMs)
         assertTrue(
             "the gate must sit below what a phone mic delivers at arm's length",
-            defaults.speechRmsThreshold <= 0.01f,
+            defaults.minSpeechRmsThreshold <= 0.01f,
         )
-        // A Galaxy A13 delivers ~0.0003 RMS for speech through VOICE_RECOGNITION; the gate
-        // has to stay below that or onset never confirms and no audio reaches the model.
-        assertEquals(0.0001f, defaults.speechRmsThreshold, 0f)
+        // A Galaxy A13 delivered ~0.0002 RMS of room tone *and* ~0.0003 RMS of speech
+        // through VOICE_RECOGNITION: no single constant separates those, which is why the
+        // gate is measured per session and only bounded by these two values.
+        assertEquals(0.0005f, defaults.minSpeechRmsThreshold, 0f)
+        assertEquals(2f, defaults.noiseFloorMultiplier, 0f)
+        assertTrue(
+            "the highest gate a bad calibration may reach must still hear normal speech",
+            defaults.maxSpeechRmsThreshold <= 0.02f,
+        )
+        assertEquals(500, defaults.calibrationMs)
+        assertEquals(25, defaults.calibrationFrames)
     }
 
     @Test

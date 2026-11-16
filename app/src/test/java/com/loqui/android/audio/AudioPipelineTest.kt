@@ -37,11 +37,13 @@ class AudioPipelineTest {
         )
         val vadConfig = VadConfig(
             frameDurationMs = 20,
-            speechRmsThreshold = 0.02f,
+            minSpeechRmsThreshold = 0.02f,
+            maxSpeechRmsThreshold = 0.5f,
+            calibrationMs = 0,
             onsetFrames = 3,
             silenceHangoverFrames = 5,
         )
-        val endpointer = SpeechEndpointer(vadConfig, EnergyVad(vadConfig.speechRmsThreshold))
+        val endpointer = SpeechEndpointer(vadConfig, EnergyVad(vadConfig))
         val provider = FakeAsrProvider(mode = AsrMode.ON_DEVICE)
 
         val events = provider.transcribe(endpointer.segment(stream.frames())).toList()
@@ -65,7 +67,9 @@ class AudioPipelineTest {
             PcmAudioSourceFactory { source },
             UnconfinedTestDispatcher(testScheduler),
         )
-        val endpointer = SpeechEndpointer(VadConfig(), EnergyVad(0.02f))
+        // The shipping configuration: 500 ms of calibration, then the measured gate.
+        val vadConfig = VadConfig(noSpeechTimeoutMs = 400)
+        val endpointer = SpeechEndpointer(vadConfig, EnergyVad(vadConfig))
         val provider = FakeAsrProvider(mode = AsrMode.ON_DEVICE)
 
         val events = provider.transcribe(endpointer.segment(stream.frames())).toList()

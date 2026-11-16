@@ -62,17 +62,22 @@ object DispatchersModule {
 object AudioModule {
 
     /**
-     * Endpointing defaults: 20 ms frames, 60 ms of speech to start an utterance and
-     * 800 ms of silence to end it.
+     * Endpointing defaults: 20 ms frames, 60 ms of speech to start an utterance, 800 ms
+     * of silence to end it, and a 500 ms opening window in which the detector measures
+     * the room before it decides what speech is.
      */
     @Provides
     @Singleton
     fun provideVadConfig(): VadConfig = VadConfig()
 
-    /** Swappable detector: an energy baseline now, Silero ONNX once models ship. */
+    /**
+     * Swappable detector: a calibrated energy baseline now, Silero ONNX once models ship.
+     * It reads its gate from the same [VadConfig] as the endpointer, so the calibration
+     * window and its bounds are tuned in one place.
+     */
     @Provides
     fun provideVoiceActivityDetector(config: VadConfig): VoiceActivityDetector =
-        EnergyVad(config.speechRmsThreshold)
+        EnergyVad(config)
 
     /**
      * The microphone is only ever opened through this factory; the permission gate

@@ -40,6 +40,11 @@ class AsrCoordinator @Inject constructor(
     /**
      * Runs one dictation session against the provider selected by `asr.mode`.
      *
+     * Text that the provider has already recognised is never thrown away: a partial is
+     * kept and delivered as the transcript when the session is cut off or the provider
+     * fails afterwards. A dictation that produced "hello wor…" must not become an error
+     * toast just because the last event was a failure.
+     *
      * @param sessionHardLimitMs final safety net, not the latency budget: it only
      * exists so a wedged provider cannot hold the microphone forever. It is longer
      * than the capture pipeline's own utterance ceiling.
@@ -53,22 +58,47 @@ class AsrCoordinator @Inject constructor(
 
         when (provider.availability()) {
             AsrAvailability.Ready -> {
+                var partial = ""
+                var delivered = false
+
                 val finished = withTimeoutOrNull(sessionHardLimitMs) {
                     provider.transcribe(audio).collect { event ->
                         when (event) {
-                            // Partials are surfaced on the bubble in Phase 3.
-                            is AsrEvent.Partial -> Unit
-                            is AsrEvent.Final ->
+                            is AsrEvent.Partial -> partial = event.text
+                            is AsrEvent.Final -> {
+                                delivered = true
                                 emit(AsrSessionEvent.Transcript(event.text, provider.mode))
-                            is AsrEvent.Failure ->
-                                emit(AsrSessionEvent.Failed(event.reason, provider.mode))
+                            }
+
+                            is AsrEvent.Failure -> {
+                                val salvaged = partial.takeIf { !delivered && it.isNotBlank() }
+                                if (salvaged != null && event.reason.keepsRecognisedText) {
+                                    Timber.w(
+                                        "Provider reported %s after %d chars of partial text; " +
+                                            "delivering the partial instead of an error",
+                                        event.reason,
+                                        salvaged.length,
+                                    )
+                                    delivered = true
+                                    emit(AsrSessionEvent.Transcript(salvaged.trim(), provider.mode))
+                                } else {
+                                    emit(AsrSessionEvent.Failed(event.reason, provider.mode))
+                                }
+                            }
                         }
                     }
                 }
 
                 if (finished == null) {
                     Timber.w("ASR session exceeded the %d ms hard limit", sessionHardLimitMs)
-                    emit(AsrSessionEvent.Failed(AsrFailure.NETWORK_TIMEOUT, provider.mode))
+                    val salvaged = partial.takeIf { !delivered && it.isNotBlank() }
+                    if (salvaged != null) {
+                        // The user's second tap or a wedged flush: whatever was recognised
+                        // before the cut is still what they said.
+                        emit(AsrSessionEvent.Transcript(salvaged.trim(), provider.mode))
+                    } else {
+                        emit(AsrSessionEvent.Failed(AsrFailure.NETWORK_TIMEOUT, provider.mode))
+                    }
                 }
             }
 
@@ -87,3 +117,13 @@ class AsrCoordinator @Inject constructor(
         const val SESSION_HARD_LIMIT_MS = 60_000L
     }
 }
+
+/**
+ * Whether a failure is worth overriding with text the provider already produced.
+ *
+ * `PROVIDER_ERROR` and a timeout mean "the recogniser broke or stalled mid-sentence", so
+ * a partial is the best transcript available. `NO_SPEECH`, `MODEL_UNAVAILABLE`,
+ * `MISSING_KEY` and `CANCELLED` are verdicts on the session itself and must stand.
+ */
+private val AsrFailure.keepsRecognisedText: Boolean
+    get() = this == AsrFailure.PROVIDER_ERROR || this == AsrFailure.NETWORK_TIMEOUT

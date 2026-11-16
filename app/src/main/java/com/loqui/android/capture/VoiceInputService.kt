@@ -88,6 +88,10 @@ class VoiceInputService : Service() {
     private var captureJob: Job? = null
     private var isForeground = false
 
+    /** A stop the user asked for: the recogniser is flushing, not failing. */
+    private var gracefulStopInProgress = false
+    private var flushWatchdog: Job? = null
+
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onCreate() {
@@ -124,6 +128,11 @@ class VoiceInputService : Service() {
             Timber.d("Capture already running; ignoring start")
             return
         }
+
+        // A stop from the previous session must not close this one on its first frame.
+        gracefulStopInProgress = false
+        flushWatchdog?.cancel()
+        flushWatchdog = null
 
         // Android 14 refuses a `microphone` promotion without the grant, and a grant that
         // was revoked must produce a message rather than a crash on the audio thread.
@@ -225,9 +234,24 @@ class VoiceInputService : Service() {
                 publish(CaptureState.NeedsKey)
             }
 
-            is AsrSessionEvent.Failed -> {
-                Timber.w("ASR session failed: %s (%s)", event.reason, event.mode)
-                publish(CaptureState.Error(describe(event.reason, event.mode)))
+            is AsrSessionEvent.Failed -> when {
+                // Stopped by the user before anything was recognised: the session is over,
+                // not failed. No toast, no red bubble.
+                event.reason == AsrFailure.NO_SPEECH && gracefulStopInProgress -> {
+                    Timber.d("Flush after the stop produced no text; closing silently")
+                    captureStateHolder.reset()
+                }
+
+                // A cancellation is never reported as an error.
+                event.reason == AsrFailure.CANCELLED -> {
+                    Timber.d("ASR session cancelled; closing the bubble silently")
+                    captureStateHolder.reset()
+                }
+
+                else -> {
+                    Timber.w("ASR session failed: %s (%s)", event.reason, event.mode)
+                    publish(CaptureState.Error(describe(event.reason, event.mode)))
+                }
             }
 
             is AsrSessionEvent.Transcript -> {
@@ -279,10 +303,62 @@ class VoiceInputService : Service() {
     }
 
     /**
-     * Second tap on the bubble (or a cancel intent): drop the job, tell the bubble the
-     * session is over, and release the microphone.
+     * A tap that stops a dictation, without throwing away what was said.
+     *
+     * The first tap closes the microphone but leaves the session running: the capture
+     * flow *completes* (see [AudioCaptureStream.stop]), the endpointer closes the
+     * utterance and the recogniser flushes, so the words already spoken are still
+     * inserted. A second tap — or a flush that outlives [FLUSH_TIMEOUT_MS] — drops the
+     * session outright.
+     *
+     * A cancel during insertion is ignored: the transcript is already on its way into the
+     * field and killing the job mid-paste would lose it.
      */
     private fun cancelCapture() {
+        val state = captureStateHolder.state.value
+        when {
+            // Second tap, or a session that never reached the recogniser.
+            gracefulStopInProgress -> hardCancelCapture()
+
+            state == CaptureState.Listening && captureJob?.isActive == true ->
+                stopCaptureGracefully()
+
+            state == CaptureState.Processing ->
+                Timber.d("Cancel ignored: the transcript is being inserted")
+
+            else -> hardCancelCapture()
+        }
+    }
+
+    /**
+     * Closes the microphone and lets the recogniser finish the sentence.
+     *
+     * The bubble shows [CaptureState.Processing] because the session is finishing, not
+     * failing. If the flush yields nothing, [handleSessionEvent] closes the bubble
+     * silently instead of claiming a transcription failure.
+     */
+    private fun stopCaptureGracefully() {
+        gracefulStopInProgress = true
+        Timber.d("Stop requested: closing capture so the recogniser can flush")
+        publish(CaptureState.Processing)
+        audioCaptureStream.stop()
+
+        flushWatchdog = serviceScope.launch {
+            delay(FLUSH_TIMEOUT_MS)
+            if (captureJob?.isActive == true) {
+                Timber.w(
+                    "Recogniser still flushing %d ms after the stop; cancelling the session",
+                    FLUSH_TIMEOUT_MS,
+                )
+                captureJob?.cancel()
+            }
+        }
+    }
+
+    /** Drops the session immediately: the user asked twice, or nothing was recording. */
+    private fun hardCancelCapture() {
+        flushWatchdog?.cancel()
+        flushWatchdog = null
         captureJob?.cancel()
         captureStateHolder.reset()
         stopSelf()
@@ -293,6 +369,8 @@ class VoiceInputService : Service() {
 
     /** Drops the foreground state and lets the bubble show the outcome for a moment. */
     private fun endSession() {
+        flushWatchdog?.cancel()
+        flushWatchdog = null
         if (captureStateHolder.state.value == CaptureState.Listening) {
             // No event ever reached the UI: without this the bubble would stay on
             // "Listening" while the service is already gone.
@@ -409,6 +487,14 @@ class VoiceInputService : Service() {
          * 15 s ceiling, so a slow device that is still processing is not cut off.
          */
         private const val SESSION_WATCHDOG_MS = 30_000L
+
+        /**
+         * How long a user-initiated stop may wait for the recogniser to flush.
+         *
+         * sherpa-onnx decodes the tail in a few hundred milliseconds on a phone; 3 s
+         * covers a slow `armeabi-v7a` device without leaving the bubble spinning.
+         */
+        private const val FLUSH_TIMEOUT_MS = 3_000L
 
         /**
          * Starts a dictation session; the service owns the microphone itself.

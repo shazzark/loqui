@@ -314,20 +314,50 @@ worked. That same run measured a last-frame RMS of 0.0003 against a 0.003 gate, 
 moved to 0.0001 (-80 dBFS) and both capture and recogniser now log the session's **peak**
 RMS. Step 4 is pending a re-test on the same device.
 
+The fourth re-test on the same device found that the gate itself was the wrong shape. Peak
+RMS was `0.2180`, so the microphone was fine, but room tone measured ~`0.0002` against a
+`0.0001` gate: the onset tripped on nothing, the utterance ran to the 15 s ceiling and the
+recogniser was handed noise. One run even logged `Final transcript: 7 chars` and still
+showed "Transcription failed" — the text existed and was thrown away.
+
+No single constant can be both above room tone and below speech on every device, so:
+
+- `EnergyVad` measures the room for the first 500 ms of each session (20th percentile of
+  the frame RMS, so the speaker's own first words cannot drag it up) and gates at
+  `noiseFloor × 2`, clamped to `0.0005..0.02`. No frame is reported as speech until that
+  window closes, because a gate no room has been measured against is what tripped on noise.
+- Capture opens `MIC`, then `UNPROCESSED` (API 24+), then `VOICE_RECOGNITION`: the last one
+  is what suppressed speech to ~`0.0003` RMS on this device, so it is now the fallback
+  rather than the default.
+- A tap that stops a dictation closes the microphone *normally* instead of cancelling the
+  session, so the recogniser flushes and the words are still inserted. A second tap, or a
+  flush longer than 3 s, drops the session; text the provider already produced is delivered
+  even when the session ends in an error or times out. "Transcription failed" is never shown
+  after a user stop, and an empty result is reported as "No speech detected".
+
 ### Dictation diagnostics (debug builds)
 
 `Timber` logs one line per second of capture plus the endpoint and recogniser trace:
 
 ```
-adb logcat -s AudioCaptureStream SpeechEndpointer SherpaOnnxAsrProvider VoiceInputService
+adb logcat -s AudioCaptureStream AudioRecordPcmSource EnergyVad SpeechEndpointer SherpaOnnxAsrProvider VoiceInputService AsrCoordinator
 ```
 
 - `Captured N frames (N ms), last frame RMS 0.0003, peak 0.0003` — microphone level, never
-  audio. The peak is the loudest frame so far: compare it with the gate
-  (`VadConfig.speechRmsThreshold`, 0.0001). A peak under the gate is why onset would not
-  confirm; a peak that barely clears it is audio no recogniser can use.
+  audio. The peak is the loudest frame so far: compare it with the gate the session measured
+  (`VAD calibrated on …` below). A peak under the gate is why onset would not confirm; a peak
+  that barely clears it is audio no recogniser can use.
+- `VAD calibrated on 25 frames (500 ms): noise floor 0.0002, speech gate 0.0005` — the room
+  tone measured at the start of every session and the gate derived from it (`floor × 2`, kept
+  inside `VadConfig.minSpeechRmsThreshold`..`maxSpeechRmsThreshold`). A floor that moves
+  between sessions is the room changing; a floor near the maximum means the microphone is
+  hearing a lot of noise as well as the speaker.
+- `Microphone source MIC: 16000 Hz mono PCM-16, buffer 2560 B` — which `AudioRecord` source
+  the device accepted. `UNPROCESSED` or `VOICE_RECOGNITION` here means the preferred source
+  was refused, and the quality of what follows will be lower.
 - `Microphone released after N frames (N ms), peak RMS 0.0003` — one line per session, even
   when the utterance never started, so a quiet microphone is visible without a second run.
+  `, stopped by the user` is appended when the session ended on a tap.
 - `Utterance closed by SILENCE_HANGOVER|MAX_DURATION|NO_SPEECH_TIMEOUT after N frames` —
   which ceiling ended the session, and how much audio reached the recogniser.
 - `Model <dir>: encoder 42845182 B (40.9 MB), decoder 539499 B (0.5 MB), joiner 259572 B

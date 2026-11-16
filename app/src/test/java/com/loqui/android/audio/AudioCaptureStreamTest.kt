@@ -101,4 +101,60 @@ class AudioCaptureStreamTest {
         assertTrue(stream.frames().toList().isEmpty())
         assertEquals(1, source.releaseCount)
     }
+
+    /**
+     * The user's second tap. [AudioCaptureStream.stop] has to *end* the flow, not cancel
+     * it: a cancelled collector throws the utterance away before the recogniser sees it,
+     * which is how a manual stop used to lose the transcript.
+     */
+    @Test
+    fun `stop closes the microphone after the current frame`() = runTest {
+        lateinit var stream: AudioCaptureStream
+        var reads = 0
+        var releases = 0
+        val chunk = pcm16Samples(320) { 5 }
+        // The tap lands inside the read loop, which is where a real one arrives.
+        val source = object : PcmAudioSource {
+            override fun start() = Unit
+
+            override fun read(destination: ByteArray, offset: Int, size: Int): Int {
+                reads++
+                if (reads == 3) {
+                    stream.stop()
+                    stream.stop() // idempotent: a double tap must not close anything twice
+                }
+                chunk.copyInto(destination, offset)
+                return chunk.size
+            }
+
+            override fun release() {
+                releases++
+            }
+        }
+        stream = AudioCaptureStream(
+            PcmAudioSourceFactory { source },
+            UnconfinedTestDispatcher(testScheduler),
+        )
+
+        val frames = stream.frames().toList()
+
+        assertEquals("the loop must exit on the stop, not drain the microphone", 3, frames.size)
+        assertEquals("no read after the stop", 3, reads)
+        assertEquals(1, releases)
+    }
+
+    @Test
+    fun `a stop from the previous session does not end the next one`() = runTest {
+        val source = FakePcmAudioSource(List(4) { pcm16Samples(320) { 5 } })
+        val stream = AudioCaptureStream(
+            PcmAudioSourceFactory { source },
+            UnconfinedTestDispatcher(testScheduler),
+        )
+        // The tap that stopped the last session landed after that session had finished.
+        stream.stop()
+
+        val frames = stream.frames().toList()
+
+        assertEquals(4, frames.size)
+    }
 }

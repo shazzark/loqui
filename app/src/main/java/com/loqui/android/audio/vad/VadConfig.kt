@@ -4,14 +4,27 @@ package com.loqui.android.audio.vad
  * Tuning for [SpeechEndpointer]. Expressed in frames so the numbers stay readable
  * against the 20 ms capture frame size.
  *
+ * The speech gate is deliberately *not* a constant. A phone microphone's noise floor
+ * differs by an order of magnitude between a quiet room and a café, so [EnergyVad]
+ * measures it during the opening [calibrationMs] of every session and puts speech at
+ * [noiseFloorMultiplier] times that floor, bounded by [minSpeechRmsThreshold] and
+ * [maxSpeechRmsThreshold]. A fixed gate only ever moves the failure: too high and the
+ * onset never confirms (a Galaxy A13 delivered ~0.0003 RMS for *speech* through the
+ * `VOICE_RECOGNITION` chain, so `0.003`-`0.015` gates heard nothing at all), too low and
+ * room tone at ~0.0002 trips the onset, the utterance runs to the 15 s ceiling and the
+ * recogniser is handed noise.
+ *
  * @param frameDurationMs audio carried by one frame; must match the capture stream.
- * @param speechRmsThreshold normalised RMS (0..1) above which a frame counts as speech.
- *   `0.0001` is about -80 dBFS: deliberately below the noise floor of a phone microphone
- *   whose `VOICE_RECOGNITION` chain has gated a quiet speaker, because a Galaxy A13 was
- *   measured at ~0.0003 last-frame RMS. Every earlier value (`0.015`, `0.008`, `0.003`)
- *   sat above that and stopped the onset from confirming, so no audio ever reached the
- *   recogniser. Too low is the cheaper failure: room noise trips the onset and the
- *   utterance ends at the duration ceiling, which still produces a transcript.
+ * @param minSpeechRmsThreshold lowest gate calibration may produce, about -66 dBFS
+ *   ([MIN_SPEECH_RMS]). A silent room measures ~0.00006 RMS, and doubling that would put
+ *   the gate below the microphone's own self-noise, where a quiet talker disappears.
+ * @param maxSpeechRmsThreshold highest gate calibration may produce, about -34 dBFS. A
+ *   window that is nothing but speech must not raise the gate above normal speech.
+ * @param noiseFloorMultiplier how far above the measured floor speech has to sit. Room
+ *   tone wobbles frame to frame; 2x clears the wobble without demanding a loud voice.
+ * @param calibrationMs length of the opening window used to measure the floor. 500 ms
+ *   averages a room without making the user wait for the gate to settle. `0` disables
+ *   calibration (the gate stays at [minSpeechRmsThreshold]).
  * @param onsetFrames consecutive speech frames needed before an utterance starts;
  *   filters single-frame clicks and key taps.
  * @param silenceHangoverFrames consecutive silent frames that end the utterance;
@@ -25,7 +38,10 @@ package com.loqui.android.audio.vad
  */
 data class VadConfig(
     val frameDurationMs: Int = 20,
-    val speechRmsThreshold: Float = 0.0001f,
+    val minSpeechRmsThreshold: Float = MIN_SPEECH_RMS,
+    val maxSpeechRmsThreshold: Float = 0.02f,
+    val noiseFloorMultiplier: Float = 2f,
+    val calibrationMs: Int = 500,
     val onsetFrames: Int = 3,
     val silenceHangoverFrames: Int = 40,
     val maxUtteranceMs: Int = 15_000,
@@ -34,16 +50,33 @@ data class VadConfig(
 
     init {
         require(frameDurationMs > 0) { "frameDurationMs must be positive" }
-        require(speechRmsThreshold > 0f) { "speechRmsThreshold must be positive" }
+        require(minSpeechRmsThreshold > 0f) { "minSpeechRmsThreshold must be positive" }
+        require(maxSpeechRmsThreshold >= minSpeechRmsThreshold) {
+            "maxSpeechRmsThreshold must not be below minSpeechRmsThreshold"
+        }
+        require(noiseFloorMultiplier >= 1f) { "noiseFloorMultiplier must be at least 1" }
+        require(calibrationMs >= 0) { "calibrationMs must not be negative" }
         require(onsetFrames > 0) { "onsetFrames must be positive" }
         require(silenceHangoverFrames > 0) { "silenceHangoverFrames must be positive" }
         require(maxUtteranceMs > 0) { "maxUtteranceMs must be positive" }
         require(noSpeechTimeoutMs > 0) { "noSpeechTimeoutMs must be positive" }
     }
 
+    /** Frames in the noise-floor window; `0` when calibration is disabled. */
+    val calibrationFrames: Int
+        get() = calibrationMs / frameDurationMs
+
     val maxUtteranceFrames: Int
         get() = (maxUtteranceMs / frameDurationMs).coerceAtLeast(1)
 
     val noSpeechTimeoutFrames: Int
         get() = (noSpeechTimeoutMs / frameDurationMs).coerceAtLeast(1)
+
+    companion object {
+        /**
+         * 0.0005 is about -66 dBFS: the lowest gate a measured-silent room may produce.
+         * A quieter room must not lower the gate into the microphone's own noise.
+         */
+        const val MIN_SPEECH_RMS = 0.0005f
+    }
 }

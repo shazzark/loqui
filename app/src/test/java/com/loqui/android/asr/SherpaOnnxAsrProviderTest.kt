@@ -75,11 +75,12 @@ class SherpaOnnxAsrProviderTest {
     }
 
     @Test
-    fun `an empty transcript is a provider error, not a blank insertion`() = runTest {
+    fun `an empty transcript is reported as no speech, not a provider error`() = runTest {
         val provider = provider(paths = paths, engine = FakeEngine(textForSamples = { "" }))
 
+        // The user can act on "no speech detected"; "transcription failed" is a dead end.
         assertEquals(
-            listOf(AsrEvent.Failure(AsrFailure.PROVIDER_ERROR)),
+            listOf(AsrEvent.Failure(AsrFailure.NO_SPEECH)),
             provider.transcribe(flowOf(frame(2))).toList(),
         )
     }
