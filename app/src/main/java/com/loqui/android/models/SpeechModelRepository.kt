@@ -20,7 +20,7 @@ import timber.log.Timber
  * where the recogniser can find its files.
  *
  * The download lives in the application scope, not a ViewModel: rotating the screen or
- * leaving Home must not cancel a 122 MiB transfer. The staging directory is renamed into
+ * leaving Home must not cancel a 296 MiB transfer. The staging directory is renamed into
  * place only after every file's SHA-256 matches, so [paths] never returns a half-written
  * model.
  */
@@ -82,6 +82,11 @@ class FileSpeechModelRepository @Inject constructor(
             state.value = ModelDownloadState.Installed
             return
         }
+
+        // A superseded model is dead weight the space check would otherwise count against the
+        // new archive: swapping the default model leaves the previous directory behind, and
+        // on a phone that is the difference between "download" and "not enough space".
+        pruneSupersededModels(model)
 
         val onDisk = partFile(model).length().coerceAtLeast(0L)
         val remaining = (model.requiredBytes - onDisk).coerceAtLeast(0L)
@@ -171,4 +176,26 @@ class FileSpeechModelRepository @Inject constructor(
 
     private fun stagingDirectory(model: SpeechModel): File =
         File(modelStorage.modelsDirectory, ".${model.id}.staging")
+
+    /**
+     * Deletes model directories the catalogue no longer offers.
+     *
+     * Nothing else removes them: the id is the directory name, so a swapped default model
+     * becomes an orphan the moment the catalogue changes — 42 MB of the 20M model when the
+     * 2023-06-26 export replaced it. Only directories are touched (a `.part` file belongs to
+     * a download in flight, and dot-directories are staging), and every model the catalogue
+     * still lists is kept.
+     */
+    private fun pruneSupersededModels(current: SpeechModel) {
+        val keep = SpeechModels.all.mapTo(HashSet()) { it.id }.apply { add(current.id) }
+
+        modelStorage.modelsDirectory.listFiles()?.forEach { entry ->
+            val superseded = entry.isDirectory &&
+                !entry.name.startsWith(".") &&
+                entry.name !in keep
+            if (superseded && entry.deleteRecursively()) {
+                Timber.i("Removed superseded on-device model %s", entry.name)
+            }
+        }
+    }
 }

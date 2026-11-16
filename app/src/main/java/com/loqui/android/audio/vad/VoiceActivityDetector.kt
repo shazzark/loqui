@@ -28,11 +28,11 @@ interface VoiceActivityDetector {
  * closes: before the room is measured the only gate available is
  * [VadConfig.minSpeechRmsThreshold], and room tone in a café sits above it — which is
  * exactly the false onset that used to run an utterance to its 15 s ceiling. The cost is
- * that speech beginning in the first half second of a session is not part of the
- * utterance; the bubble needs that half second to appear anyway.
+ * that speech beginning in the first three tenths of a second of a session is not part of
+ * the utterance; the bubble needs those 300 ms to appear anyway.
  *
  * Why the 20th percentile and not the mean or the median: the window can contain the
- * start of the sentence. Six of the 25 frames (120 ms of quiet after the tap) are enough
+ * start of the sentence. Four of the 15 frames (80 ms of quiet after the tap) are enough
  * to measure the room, while a burst of speech — or one zero-filled buffer from
  * `AudioRecord` settling — cannot move the estimate on its own.
  *

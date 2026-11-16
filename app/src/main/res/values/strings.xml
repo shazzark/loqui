@@ -35,7 +35,7 @@
     <string name="section_insertion">Insertion</string>
 
     <string name="asr_mode_on_device">On-device</string>
-    <string name="asr_mode_on_device_description">Free, private, works offline. Needs a one-time 122 MB model download.</string>
+    <string name="asr_mode_on_device_description">Free, private, works offline. Needs a one-time 296 MB model download.</string>
     <string name="asr_mode_cloud">Cloud (your key)</string>
     <string name="asr_mode_cloud_description">Sends audio to the provider you choose, billed to your account.</string>
 

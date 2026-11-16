@@ -26,7 +26,7 @@ import timber.log.Timber
  * HTTPS download against the official sherpa-onnx release; the `.tar.bz2` unpack lives in
  * [extractModelArchive] so it can be tested against a real archive.
  *
- * The archive is ~122 MiB on GitHub's CDN, so the download is resumable and progress is
+ * The archive is ~296 MiB on GitHub's CDN, so the download is resumable and progress is
  * throttled to ~512 KiB steps: a Compose state update per 64 KiB read would be 2000
  * recompositions for no visible benefit. A checksum mismatch deletes the file rather
  * than letting a corrupt model reach the recogniser.

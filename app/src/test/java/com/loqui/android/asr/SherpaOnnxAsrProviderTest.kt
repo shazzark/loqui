@@ -40,6 +40,44 @@ class SherpaOnnxAsrProviderTest {
     }
 
     @Test
+    fun `warm up opens the recogniser before any audio exists`() = runTest {
+        val engine = FakeEngine()
+        val provider = provider(paths = paths, engine = engine)
+
+        provider.warmUp()
+
+        // The graphs are mapped and the decoder runtime initialised, so the dictation that
+        // follows opens its stream immediately and records from the first frame.
+        assertTrue(engine.opened)
+        assertEquals(paths, engine.openedPaths)
+        assertEquals(0, engine.session.acceptedSamples)
+        assertTrue(engine.session.finished)
+        assertTrue("the warm-up stream must be released", engine.session.released)
+    }
+
+    @Test
+    fun `warm up without an installed model is a no-op`() = runTest {
+        val engine = FakeEngine()
+        val provider = provider(paths = null, engine = engine)
+
+        provider.warmUp()
+
+        assertFalse(engine.opened)
+    }
+
+    @Test
+    fun `a failed warm up never reaches the user`() = runTest {
+        val engine = FakeEngine(failToOpen = true)
+        val provider = provider(paths = paths, engine = engine)
+
+        // Throwing here would crash the application scope for an optimisation; the failure
+        // belongs to the next dictation, which reports it with the session's own context.
+        provider.warmUp()
+
+        assertTrue(engine.opened)
+    }
+
+    @Test
     fun `frames are streamed into one session and the tail becomes the final result`() = runTest {
         val engine = FakeEngine()
         val provider = provider(paths = paths, engine = engine)

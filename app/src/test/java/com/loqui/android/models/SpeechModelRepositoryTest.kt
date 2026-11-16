@@ -110,6 +110,22 @@ class SpeechModelRepositoryTest {
     }
 
     @Test
+    fun `a superseded model directory is removed before the download starts`() = runTest {
+        // The 20M model the 2023-06-26 default replaced: its directory keeps its files (and
+        // its 42 MB) after the catalogue moved on, and that free space is counted against the
+        // new archive.
+        val superseded = File(root, "sherpa-onnx-streaming-zipformer-en-20m").apply { mkdirs() }
+        File(superseded, "encoder.onnx").writeBytes(ByteArray(4))
+        val kept = File(root, SpeechModels.onDeviceDefault.id).apply { mkdirs() }
+        val downloader = FakeDownloader()
+
+        repository(downloader).download(model)
+
+        assertFalse("the replaced model must not survive the swap", superseded.exists())
+        assertTrue("a model the catalogue still lists must be kept", kept.exists())
+    }
+
+    @Test
     fun `a model with no download source fails without touching the network`() = runTest {
         val downloader = FakeDownloader()
         val repository = repository(downloader)

@@ -10,7 +10,8 @@ the transcript is pasted into the focused field through the accessibility servic
 lands on the clipboard with a toast when no field is focused. An optional clean-up pass
 fixes punctuation and capitalisation, capped at **one second**; when it is off, slow,
 failing or has no key, the raw transcript is inserted. Phase 6 replaces the on-device
-stand-in with **sherpa-onnx** streaming Zipformer, downloaded from the official release
+stand-in with **sherpa-onnx** streaming Zipformer — the 2023-06-26 `chunk-16-left-128`
+export, not the 20M model the first pass shipped — downloaded from the official release
 into app-private storage, checksum-verified per file and unpacked only after the archive
 matches. The bubble, permissions, privacy paperwork and distribution work from Phases 3-5
 stay intact. All of it with **zero API keys**; the only network request is the model
@@ -39,10 +40,11 @@ that is a bug.
 | Microphone owner | `capture/VoiceInputService` | `microphone` foreground service; the only recorder |
 | Capture | `audio/AudioCaptureStream` + `audio/AudioRecordPcmSource` | `AudioRecord` 16 kHz mono PCM-16, 20 ms frames, released as soon as collection stops |
 | Ring buffer | `audio/AudioRingBuffer` | Bounded circular buffer between the blocking read and the consumer; drops oldest audio and counts the loss |
-| Endpointing | `audio/vad/SpeechEndpointer` + `audio/vad/EnergyVad` | Onset (60 ms above 0.0001 RMS, ≈ -80 dBFS) → speech → hangover (800 ms) → utterance complete; a session also closes after 8 s without speech and is cut at 15 s, so a mis-tuned gate can never hold the bubble |
+| Endpointing | `audio/vad/SpeechEndpointer` + `audio/vad/EnergyVad` | Gate measured from the first 300 ms of the room (`noiseFloor × 2`, clamped to `0.0005..0.02`) → onset (60 ms) → speech → hangover (800 ms) → utterance complete; a session also closes after 8 s without speech and is cut at 15 s, so a mis-tuned gate can never hold the bubble |
 | Floating trigger | `trigger/BubbleService` + `BubbleController` | `specialUse` overlay service: draggable disc, tap toggles capture, never records audio or touches the network |
 | Bubble states | `trigger/BubbleAppearance` | Pure mapping `CaptureState` → accent, short label, spinner, pulse; the only `View` code lives in `BubbleController` |
-| Recognition | `asr/AsrCoordinator`, `asr/AsrProviderFactory` | `asr/SherpaOnnxAsrProvider` on-device (sherpa-onnx streaming Zipformer, int8); `asr/cloud/CloudAsrProvider` for opt-in cloud, gated on the user's key |
+| Recognition | `asr/AsrCoordinator`, `asr/AsrProviderFactory` | `asr/SherpaOnnxAsrProvider` on-device (sherpa-onnx streaming Zipformer 2023-06-26, int8 `chunk-16-left-128`); `asr/cloud/CloudAsrProvider` for opt-in cloud, gated on the user's key |
+| Recogniser warm-up | `asr/RecogniserWarmUp` | Loads the ONNX graphs from `Application.onCreate` and again when an install finishes, so the seconds-long load is never spent between the tap and the first recorded frame |
 | Clean-up (optional) | `llm/LlmCoordinator`, `llm/LlmProviderFactory` | Off by default; `OnDeviceLlmCorrector` (deterministic punctuation) or `llm/cloud/CloudLlmCorrector`, hard-capped at 1 s — any skip inserts the raw transcript |
 | Prompt | `llm/LlmPrompt` | One reviewable instruction: fix punctuation, never add/remove words, reply with the text only |
 | Insertion | `insertion/DefaultTextInserter` | Always copies to clipboard first, then attempts an accessibility paste; clipboard is the guaranteed fallback |
@@ -237,8 +239,8 @@ On a real device, with the bubble running:
    accessibility row → the disclosure dialog appears first; *I understand* opens the system
    accessibility page, *Not now* leaves the clipboard path intact. After accepting once,
    the dialog no longer appears.
-6. **Model card.** *On-device model* shows the sherpa-onnx Zipformer entry, "About 122 MB
-   download · Apache 2.0 license · 42 MB on disk", the free-space line and an enabled
+6. **Model card.** *On-device model* shows the sherpa-onnx Zipformer entry, "About 296 MB
+   download · Apache 2.0 license · 68 MB on disk", the free-space line and an enabled
    *Download model* button. A device with less free space than the archive plus its
    unpacked copy shows the shortfall line and the download fails before any request.
 
@@ -258,12 +260,19 @@ with fakes, so no device or native library is needed:
   and test wavs in the same archive are not installed, a short entry, a checksum mismatch and
   a missing entry each fail the install and delete the file instead of leaving a 0-byte
   model, and an archive wrapped in an extra directory is still matched
+- `SpeechModelsTest` — the catalogue entry stays the larger `chunk-16-left-128` export (all
+  three transducer files from the same export, an encoder well above the 20M model's 42.8 MB)
+  and never ships under a license that forbids commercial use
 - `SherpaOnnxAsrProviderTest` — a missing model reports `MODEL_UNAVAILABLE` without opening
   the engine; frames become de-duplicated partials plus one trimmed final; zero usable audio
   (empty flow or torn frames) reports `NO_SPEECH` instead of inventing text; an engine that
   throws surfaces `PROVIDER_ERROR` and still releases the session; an empty final result or a
   decode failure after speech falls back to the last partial instead of discarding the
-  dictation
+  dictation; `warmUp()` opens, drains and releases a stream before any audio exists, is a
+  no-op without an installed model, and never throws
+- `RecogniserWarmUpTest` — an installed model is warmed for the next dictation, a missing one
+  is not opened, cloud mode spends no memory on it, a finished install warms immediately and
+  switching back from cloud warms again
 - `Pcm16Test` — little-endian PCM-16 converts to floats in `[-1, 1]`, and an odd trailing
   byte is dropped rather than read past the end of the frame
 - `AsrProviderFactoryTest` — on-device returns the injected app-scoped provider, cloud is
@@ -322,10 +331,12 @@ showed "Transcription failed" — the text existed and was thrown away.
 
 No single constant can be both above room tone and below speech on every device, so:
 
-- `EnergyVad` measures the room for the first 500 ms of each session (20th percentile of
+- `EnergyVad` measures the room for the first 300 ms of each session (20th percentile of
   the frame RMS, so the speaker's own first words cannot drag it up) and gates at
   `noiseFloor × 2`, clamped to `0.0005..0.02`. No frame is reported as speech until that
   window closes, because a gate no room has been measured against is what tripped on noise.
+  The window is dead air the recogniser never sees, so it is as short as the measurement
+  allows: 300 ms, down from 500 ms.
 - Capture opens `MIC`, then `UNPROCESSED` (API 24+), then `VOICE_RECOGNITION`: the last one
   is what suppressed speech to ~`0.0003` RMS on this device, so it is now the fallback
   rather than the default.
@@ -334,6 +345,37 @@ No single constant can be both above room tone and below speech on every device,
   flush longer than 3 s, drops the session; text the provider already produced is delivered
   even when the session ends in an error or times out. "Transcription failed" is never shown
   after a user stop, and an empty result is reported as "No speech detected".
+
+### Model upgrade (2023-06-26 export) and first-partial latency
+
+The 20M model was replaced by the 2023-06-26 `chunk-16-left-128` export. Its encoder
+metadata is the authority on both counts:
+
+| | 20M (2023-02-17) | 2023-06-26 `chunk-16-left-128` |
+| --- | --- | --- |
+| `model_type` | `zipformer` | `zipformer2` |
+| encoder layers | 10 | 18 |
+| left context | 64 | 128 |
+| `T` (frames per chunk) | 39 | 45 |
+| int8 encoder | 42.8 MB | 70.1 MB |
+| archive / installed | 122 MB / 42 MB | 296 MB / 68 MB |
+
+`OnlineModelConfig.modelType` has to match that first row: the legacy class built for
+`zipformer` cannot consume a `zipformer2` export. `tokens.txt` is byte-identical between the
+two releases, which is why only the three transducer hashes in the catalogue changed.
+
+What the swap does **not** do is make the first partial arrive sooner by itself: sherpa-onnx
+needs `T` frames of audio before its first decode, so 450 ms of speech against the old 390 ms.
+What made a dictation feel stalled was everything around it:
+
+- The recogniser was opened *inside* `transcribe`, before the first audio frame was
+  collected, so on a cold process the microphone stayed closed for the whole load — and the
+  opening words of the first sentence were never recorded. `RecogniserWarmUp` now loads it
+  from `Application.onCreate` and again when an install finishes.
+- 500 ms of VAD calibration was withheld from the recogniser before its first speech frame;
+  it is 300 ms now.
+- Two intra-op threads kept 42 MB of graphs ahead of the microphone; 68 MB needs more, so the
+  engine asks for four (clamped to the cores the device actually has).
 
 ### Dictation diagnostics (debug builds)
 
@@ -360,18 +402,22 @@ adb logcat -s AudioCaptureStream AudioRecordPcmSource EnergyVad SpeechEndpointer
   `, stopped by the user` is appended when the session ended on a tap.
 - `Utterance closed by SILENCE_HANGOVER|MAX_DURATION|NO_SPEECH_TIMEOUT after N frames` —
   which ceiling ended the session, and how much audio reached the recogniser.
-- `Model <dir>: encoder 42845182 B (40.9 MB), decoder 539499 B (0.5 MB), joiner 259572 B
+- `Model <dir>: encoder 70108816 B (66.9 MB), decoder 540688 B (0.5 MB), joiner 259416 B
   (0.2 MB), tokens 5048 B (0.0 MB); ABI armv8l; heap max .. MB` — exact bytes prove the four
   installed files are complete (a size the catalogue disagrees with prints `expected N B`,
   and a missing file prints `MISSING`), which ABI the process picked, and how much headroom
-  a 32-bit device has for ~44 MB of int8 graphs. Whole megabytes used to print the decoder
+  a 32-bit device has for ~68 MB of int8 graphs. Whole megabytes used to print the decoder
   as `0 MB`, which looked like a broken extract.
-- `Unpacked <id>: encoder.onnx 42845182 B, decoder.onnx 539499 B, …` — the install's own
+- `Unpacked <id>: encoder.onnx 70108816 B, decoder.onnx 540688 B, …` — the install's own
   record of what each archive entry produced.
-- `Recogniser ready in N ms`, `Audio ended: N frames, N ms, N partials, peak RMS 0.0003`,
-  `Final transcript: N chars` — the on-device path. `Audio ended: 0 frames` means nothing
-  was sent, which is reported to the user as "No speech detected"; a low peak there means the
-  recogniser was given silence.
+- `Removed superseded on-device model <dir>` — the previous default model's directory was
+  deleted before a download, so its files are not counted against the new archive.
+- `Recogniser warmed in N ms for <dir>`, `Recogniser ready in N ms`, `Audio ended: N frames,
+  N ms, N partials, peak RMS 0.0003`, `Final transcript: N chars` — the on-device path.
+  `Recogniser ready` should be a few milliseconds once the warm-up ran: a second-long number
+  there means the load happened between the tap and the first frame. `Audio ended: 0 frames`
+  means nothing was sent, which is reported to the user as "No speech detected"; a low peak
+  there means the recogniser was given silence.
 - `Could not open the on-device recogniser in N ms (java.lang.X: message)` — the exact
   throwable from sherpa-onnx with its stack trace, so a missing JNI symbol, an unreadable
   model and an `OutOfMemoryError` are told apart.

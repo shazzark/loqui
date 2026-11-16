@@ -18,6 +18,7 @@ import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import timber.log.Timber
 
 /**
@@ -47,6 +48,53 @@ class SherpaOnnxAsrProvider @Inject constructor(
 
     override fun availability(): AsrAvailability =
         if (models.paths() != null) AsrAvailability.Ready else AsrAvailability.ModelMissing
+
+    /**
+     * Loads the recogniser before the first dictation needs it.
+     *
+     * Opening the transducer is the most expensive step of a session — seconds on a cold
+     * phone for ~68 MiB of ONNX graphs — and it happens *inside* `transcribe`, before the
+     * first audio frame is collected. Between the tap and the first recorded frame the
+     * microphone is therefore closed, and the opening words of the first sentence of the
+     * day never reach the recogniser at all: the transcript starts mid-sentence, and the
+     * first partial arrives that much later. `RecogniserWarmUp` calls this as soon as the
+     * model is installed so the graphs are mapped before the bubble is tapped; a warm-up
+     * that fails is not a user-visible failure, because the next dictation reports the same
+     * problem with the session's own context.
+     */
+    suspend fun warmUp() {
+        val paths = models.paths() ?: return
+
+        withContext(ioDispatcher) {
+            sessionLock.withLock {
+                val startedAt = System.currentTimeMillis()
+                try {
+                    val session = engine.open(paths, AudioFrame.SAMPLE_RATE_HZ)
+                    try {
+                        // Drain once: mapping the graphs is half the cost, initialising the
+                        // decoder runtime on the first `decode()` is the other half.
+                        session.finish()
+                        drain(session)
+                    } finally {
+                        session.release()
+                    }
+                    Timber.d(
+                        "Recogniser warmed in %d ms for %s",
+                        System.currentTimeMillis() - startedAt,
+                        paths.directory.name,
+                    )
+                } catch (cancellation: CancellationException) {
+                    throw cancellation
+                } catch (throwable: Throwable) {
+                    Timber.w(
+                        throwable,
+                        "Could not warm the recogniser (%s)",
+                        describeFailure(throwable),
+                    )
+                }
+            }
+        }
+    }
 
     override fun transcribe(audio: Flow<AudioFrame>): Flow<AsrEvent> = flow {
         val paths = models.paths()
@@ -220,7 +268,7 @@ class SherpaOnnxAsrProvider @Inject constructor(
     /**
      * The numbers needed to explain a recogniser that will not run on a real phone: the
      * installed files (a truncated extract shows up here as a size), the process ABI, and
-     * the heap a 32-bit device has left for ~44 MB of int8 graphs.
+     * the heap a 32-bit device has left for ~68 MB of int8 graphs.
      */
     private fun logEnvironment(paths: ModelPaths) {
         val runtime = Runtime.getRuntime()

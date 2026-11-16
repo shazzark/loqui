@@ -22,8 +22,11 @@ package com.loqui.android.audio.vad
  *   window that is nothing but speech must not raise the gate above normal speech.
  * @param noiseFloorMultiplier how far above the measured floor speech has to sit. Room
  *   tone wobbles frame to frame; 2x clears the wobble without demanding a loud voice.
- * @param calibrationMs length of the opening window used to measure the floor. 500 ms
- *   averages a room without making the user wait for the gate to settle. `0` disables
+ * @param calibrationMs length of the opening window used to measure the floor. 300 ms is
+ *   the shortest window whose 20th percentile still comes from quiet frames only (4 of 15)
+ *   rather than from the speaker's own first word. Every frame inside the window is
+ *   withheld from the recogniser, so the window is also the dead air in front of the first
+ *   word: 300 ms, and 200 ms less than the half second it replaces. `0` disables
  *   calibration (the gate stays at [minSpeechRmsThreshold]).
  * @param onsetFrames consecutive speech frames needed before an utterance starts;
  *   filters single-frame clicks and key taps.
@@ -41,7 +44,7 @@ data class VadConfig(
     val minSpeechRmsThreshold: Float = MIN_SPEECH_RMS,
     val maxSpeechRmsThreshold: Float = 0.02f,
     val noiseFloorMultiplier: Float = 2f,
-    val calibrationMs: Int = 500,
+    val calibrationMs: Int = 300,
     val onsetFrames: Int = 3,
     val silenceHangoverFrames: Int = 40,
     val maxUtteranceMs: Int = 15_000,

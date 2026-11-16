@@ -59,23 +59,37 @@ data class SpeechModel(
 /**
  * The on-device speech catalogue.
  *
- * The default entry is the English streaming Zipformer (20M parameters) from the
- * official sherpa-onnx `asr-models` release. The archive is ~122 MiB and contains fp32
- * and int8 variants plus test wavs; only the int8 transducer and the token table are
- * installed, which is ~42 MiB on disk.
+ * The default entry is the English streaming Zipformer exported for sherpa-onnx on
+ * 2023-06-26 (`chunk-16-left-128`). It replaces the 20M model of 2023-02-17 that Phase 6
+ * shipped: 18 encoder layers instead of 10 and 128 frames of left context instead of 64,
+ * which is the accuracy step the transcripts needed. Its encoder reports
+ * `model_type: zipformer2`, so [com.loqui.android.asr.SherpaOnnxStreamingEngine] must build
+ * the recogniser with that model type; the old export reports plain `zipformer`.
+ *
+ * The archive is ~296 MiB and contains fp32 and int8 variants, a second `left-64` export
+ * and test wavs; only the int8 `left-128` transducer and the token table are installed,
+ * which is ~68 MiB on disk.
  *
  * Checksums were measured from the published archive at
- * `https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/…-2023-02-17.tar.bz2`
- * (SHA-256 `9c559283e8498d3fe95913c79ca1cb454bb26281ac2b102b41306c7d752765d9`).
+ * `https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/…-2023-06-26.tar.bz2`
+ * (SHA-256 `639e25b578e9e997131402199419c13a941f8e4e198e2da1ce57dbf5cf401282`). The token
+ * table is byte-identical to the 20M model's — both are the same librispeech BPE vocabulary
+ * — which is why its hash did not change with the swap.
  */
 object SpeechModels {
 
     const val ARCHIVE_SHA256 =
-        "9c559283e8498d3fe95913c79ca1cb454bb26281ac2b102b41306c7d752765d9"
-    const val ARCHIVE_BYTES = 127_887_156L
+        "639e25b578e9e997131402199419c13a941f8e4e198e2da1ce57dbf5cf401282"
+    const val ARCHIVE_BYTES = 310_414_022L
 
-    private const val ARCHIVE_DIR = "sherpa-onnx-streaming-zipformer-en-20M-2023-02-17"
-    private const val MODEL_ID = "sherpa-onnx-streaming-zipformer-en-20m"
+    private const val ARCHIVE_DIR = "sherpa-onnx-streaming-zipformer-en-2023-06-26"
+
+    /**
+     * Directory the verified files land in. Also the model's id in settings, logs and the
+     * Home card; [ARCHIVE_DIR] happens to match, and an install of the old 20M model is
+     * simply a different directory that [FileSpeechModelRepository.paths] will not accept.
+     */
+    private const val MODEL_ID = ARCHIVE_DIR
 
     const val TOKENS_FILE = "tokens.txt"
     const val ENCODER_FILE = "encoder.onnx"
@@ -84,7 +98,7 @@ object SpeechModels {
 
     val onDeviceDefault = SpeechModel(
         id = MODEL_ID,
-        displayName = "English (streaming Zipformer, 20M)",
+        displayName = "English (streaming Zipformer, high accuracy)",
         approxBytes = ARCHIVE_BYTES,
         license = ModelLicense.APACHE_2_0,
         checksum = ARCHIVE_SHA256,
@@ -98,22 +112,22 @@ object SpeechModels {
                 sizeBytes = 5_048L,
             ),
             ModelFile(
-                archivePath = "$ARCHIVE_DIR/encoder-epoch-99-avg-1.int8.onnx",
+                archivePath = "$ARCHIVE_DIR/encoder-epoch-99-avg-1-chunk-16-left-128.int8.onnx",
                 fileName = ENCODER_FILE,
-                sha256 = "3810755ce7c3ab26b42a8bcf39d191308fa27fb0f53358823ba46141d03b7eb3",
-                sizeBytes = 42_845_182L,
+                sha256 = "5022b2eca5b19d1bc104fcf33e26bc32604b7df553cd2e1f62e31dc7b05e9c87",
+                sizeBytes = 70_108_816L,
             ),
             ModelFile(
-                archivePath = "$ARCHIVE_DIR/decoder-epoch-99-avg-1.int8.onnx",
+                archivePath = "$ARCHIVE_DIR/decoder-epoch-99-avg-1-chunk-16-left-128.int8.onnx",
                 fileName = DECODER_FILE,
-                sha256 = "21e2a2acd961b3ac72f55be2f10f1a285e1b0b0ba010d7c0b6eab141411b163c",
-                sizeBytes = 539_499L,
+                sha256 = "780c63ee94c7cfa314211172e5d09b406c0da2beab5c40ea2f54cc95670b76a5",
+                sizeBytes = 540_688L,
             ),
             ModelFile(
-                archivePath = "$ARCHIVE_DIR/joiner-epoch-99-avg-1.int8.onnx",
+                archivePath = "$ARCHIVE_DIR/joiner-epoch-99-avg-1-chunk-16-left-128.int8.onnx",
                 fileName = JOINER_FILE,
-                sha256 = "e085d73b593cf9b0707f370dbd656d58327d3fe36d80d849202ef81df02cb01e",
-                sizeBytes = 259_572L,
+                sha256 = "abd5e30f3f16fc510605c6029dba33f10e4386bd75c5bdc30cf94076864db10d",
+                sizeBytes = 259_416L,
             ),
         ),
     )

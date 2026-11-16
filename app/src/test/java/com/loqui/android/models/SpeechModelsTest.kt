@@ -58,6 +58,46 @@ class SpeechModelsTest {
     }
 
     @Test
+    fun `the transducer is the chunk-16 left-128 int8 export`() {
+        val model = SpeechModels.onDeviceDefault
+
+        // All three transducer files have to come from the same export: mixing the encoder
+        // of one model with the joiner of another produces a recogniser that runs and emits
+        // nonsense, which is far harder to diagnose than a missing file.
+        listOf(
+            SpeechModels.ENCODER_FILE,
+            SpeechModels.DECODER_FILE,
+            SpeechModels.JOINER_FILE,
+        ).forEach { name ->
+            val path = model.file(name)!!.archivePath
+            assertTrue(
+                "$name comes from $path, not the chunk-16-left-128 export",
+                path.endsWith("-chunk-16-left-128.int8.onnx"),
+            )
+        }
+        assertTrue(
+            "${model.id} is not the 2023-06-26 release",
+            model.id.contains("2023-06-26"),
+        )
+    }
+
+    @Test
+    fun `the default model is the larger export, not the 20M stand-in`() {
+        val encoder = SpeechModels.onDeviceDefault.file(SpeechModels.ENCODER_FILE)!!
+
+        // The 20M model's int8 encoder was 42.8 MB. Anything at or below that is a silent
+        // downgrade back to the model whose transcripts prompted this swap.
+        assertTrue(
+            "encoder is ${encoder.sizeBytes} bytes: this is not the larger model",
+            encoder.sizeBytes > 60L * mebibyte,
+        )
+        assertTrue(
+            "the archive is too small to contain the 2023-06-26 export",
+            SpeechModels.onDeviceDefault.approxBytes > 250L * mebibyte,
+        )
+    }
+
+    @Test
     fun `the install budget covers the archive plus the unpacked copy`() {
         val model = SpeechModels.onDeviceDefault
 

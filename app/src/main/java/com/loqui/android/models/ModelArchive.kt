@@ -17,7 +17,7 @@ import timber.log.Timber
  *
  * Split out of the Ktor downloader so the unpack path — the half that decides whether a
  * phone ever has a usable recogniser — is exercised by a JVM test against a real bzip2 +
- * tar stream, not only by a fake. The archive is ~122 MiB and carries fp32 variants and
+ * tar stream, not only by a fake. The archive is ~296 MiB and carries fp32 variants and
  * test wavs, so nothing but the catalogue's exact entries is written and every entry is
  * hashed while it streams to disk.
  *

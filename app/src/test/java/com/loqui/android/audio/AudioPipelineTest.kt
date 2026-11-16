@@ -67,7 +67,7 @@ class AudioPipelineTest {
             PcmAudioSourceFactory { source },
             UnconfinedTestDispatcher(testScheduler),
         )
-        // The shipping configuration: 500 ms of calibration, then the measured gate.
+        // The shipping configuration: 300 ms of calibration, then the measured gate.
         val vadConfig = VadConfig(noSpeechTimeoutMs = 400)
         val endpointer = SpeechEndpointer(vadConfig, EnergyVad(vadConfig))
         val provider = FakeAsrProvider(mode = AsrMode.ON_DEVICE)

@@ -81,8 +81,8 @@ class EnergyVadCalibrationTest {
         measured(vad, SPEECH_AMPLITUDE, frames = 19)
 
         assertTrue(vad.isCalibrated)
-        // 0.001007 x 2, measured from the quiet sixth of the window and not from the 19
-        // frames of speech that dominate it.
+        // 0.001007 x 2, measured from the quiet frames at the head of the window and not
+        // from the 9 frames of speech that follow them.
         assertEquals(0.002f, vad.speechRmsThreshold, 1e-4f)
         assertTrue(
             "speech must still pass a gate measured out of a window it dominated",
@@ -95,7 +95,8 @@ class EnergyVadCalibrationTest {
         val vad = detector()
 
         // Even a shout is unmeasurable during the window: there is no gate to judge it by.
-        repeat(24) { assertFalse(vad.isSpeech(audioFrame(SPEECH_AMPLITUDE))) }
+        // 14 of the 15 frames: the window closes on the fifteenth.
+        repeat(14) { assertFalse(vad.isSpeech(audioFrame(SPEECH_AMPLITUDE))) }
         assertFalse(vad.isCalibrated)
 
         // The frame that closes the window is judged by the measured gate.
@@ -134,12 +135,9 @@ class EnergyVadCalibrationTest {
      */
     @Test
     fun `room tone above the old gate no longer opens an utterance`() = runTest {
-        val config = VadConfig(
-            frameDurationMs = 20,
-            minSpeechRmsThreshold = 0.0005f,
-            calibrationMs = 500,
-            noSpeechTimeoutMs = 1_000,
-        )
+        // The shipping calibration window, not an override: the fix has to hold with the
+        // defaults the app actually runs.
+        val config = VadConfig(noSpeechTimeoutMs = 1_000)
         val endpointer = SpeechEndpointer(config, EnergyVad(config))
 
         val emitted = endpointer.segment(

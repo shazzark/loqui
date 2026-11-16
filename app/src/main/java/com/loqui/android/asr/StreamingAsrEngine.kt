@@ -38,10 +38,11 @@ interface StreamingAsrEngine {
 /**
  * sherpa-onnx streaming Zipformer over the int8 transducer files.
  *
- * The recogniser is expensive to build (it loads ~43 MiB of ONNX graphs), so it is kept
- * for the app's lifetime and rebuilt only if the model paths or sample rate change. Each
- * dictation still gets its own [OnlineStream]; recogniser state never leaks between
- * utterances.
+ * The recogniser is expensive to build (it loads ~68 MiB of ONNX graphs and takes seconds
+ * on a phone), so it is kept for the app's lifetime and rebuilt only if the model paths or
+ * sample rate change. `SherpaOnnxAsrProvider.warmUp()` pays that cost before the first
+ * dictation instead of between the tap and the first recorded frame. Each dictation still
+ * gets its own [OnlineStream]; recogniser state never leaks between utterances.
  */
 @Singleton
 class SherpaOnnxStreamingEngine @Inject constructor() : StreamingAsrEngine {
@@ -83,10 +84,14 @@ class SherpaOnnxStreamingEngine @Inject constructor() : StreamingAsrEngine {
                     joiner = paths.joiner.absolutePath,
                 ),
                 tokens = paths.tokens.absolutePath,
-                numThreads = 2,
+                numThreads = NUM_THREADS,
                 debug = false,
                 provider = "cpu",
-                modelType = "zipformer",
+                // Must match the encoder's own metadata. The installed export reports
+                // `model_type: zipformer2` (chunk-16, 128 frames of left context); asking
+                // for "zipformer" builds the legacy transducer class against those outputs
+                // and throws instead of recognising.
+                modelType = MODEL_TYPE,
             ),
             // Endpointing is Loqui's job (`SpeechEndpointer`); resetting inside sherpa
             // would split one dictation into several unrelated results.
@@ -126,5 +131,17 @@ class SherpaOnnxStreamingEngine @Inject constructor() : StreamingAsrEngine {
     private companion object {
         /** Zipformer streaming models use 80-dimensional fbank features. */
         const val FEATURE_DIM = 80
+
+        /** The `model_type` the installed encoder declares in its ONNX metadata. */
+        const val MODEL_TYPE = "zipformer2"
+
+        /**
+         * Intra-op threads for the decoder. The 2023-06-26 encoder is roughly 1.6x the
+         * compute of the 20M model it replaced, and a decoder that cannot keep up with the
+         * microphone delays every partial by the backlog it builds. Four threads (clamped to
+         * the cores a device actually reports) keeps the performance cores busy without
+         * asking a two-core `armeabi-v7a` device for pools it cannot run.
+         */
+        val NUM_THREADS = Runtime.getRuntime().availableProcessors().coerceIn(1, 4)
     }
 }

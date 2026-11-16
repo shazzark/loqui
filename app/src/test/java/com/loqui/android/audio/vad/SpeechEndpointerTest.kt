@@ -148,8 +148,8 @@ class SpeechEndpointerTest {
             "the highest gate a bad calibration may reach must still hear normal speech",
             defaults.maxSpeechRmsThreshold <= 0.02f,
         )
-        assertEquals(500, defaults.calibrationMs)
-        assertEquals(25, defaults.calibrationFrames)
+        assertEquals(300, defaults.calibrationMs)
+        assertEquals(15, defaults.calibrationFrames)
     }
 
     @Test
