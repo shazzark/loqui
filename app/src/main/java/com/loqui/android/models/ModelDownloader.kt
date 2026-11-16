@@ -53,6 +53,10 @@ internal fun sha256Hex(file: File): String {
     return digest.digest().toHex()
 }
 
+/** Lowercase hex SHA-256 of an in-memory payload (catalogue checks, tests). */
+internal fun sha256Hex(bytes: ByteArray): String =
+    MessageDigest.getInstance("SHA-256").digest(bytes).toHex()
+
 internal fun ByteArray.toHex(): String {
     val digits = "0123456789abcdef"
     return buildString(size * 2) {

@@ -39,7 +39,7 @@ that is a bug.
 | Microphone owner | `capture/VoiceInputService` | `microphone` foreground service; the only recorder |
 | Capture | `audio/AudioCaptureStream` + `audio/AudioRecordPcmSource` | `AudioRecord` 16 kHz mono PCM-16, 20 ms frames, released as soon as collection stops |
 | Ring buffer | `audio/AudioRingBuffer` | Bounded circular buffer between the blocking read and the consumer; drops oldest audio and counts the loss |
-| Endpointing | `audio/vad/SpeechEndpointer` + `audio/vad/EnergyVad` | Onset (60 ms above 0.003 RMS, ≈ -50 dBFS) → speech → hangover (800 ms) → utterance complete; a session also closes after 8 s without speech and is cut at 15 s, so a mis-tuned gate can never hold the bubble |
+| Endpointing | `audio/vad/SpeechEndpointer` + `audio/vad/EnergyVad` | Onset (60 ms above 0.0001 RMS, ≈ -80 dBFS) → speech → hangover (800 ms) → utterance complete; a session also closes after 8 s without speech and is cut at 15 s, so a mis-tuned gate can never hold the bubble |
 | Floating trigger | `trigger/BubbleService` + `BubbleController` | `specialUse` overlay service: draggable disc, tap toggles capture, never records audio or touches the network |
 | Bubble states | `trigger/BubbleAppearance` | Pure mapping `CaptureState` → accent, short label, spinner, pulse; the only `View` code lives in `BubbleController` |
 | Recognition | `asr/AsrCoordinator`, `asr/AsrProviderFactory` | `asr/SherpaOnnxAsrProvider` on-device (sherpa-onnx streaming Zipformer, int8); `asr/cloud/CloudAsrProvider` for opt-in cloud, gated on the user's key |
@@ -58,7 +58,7 @@ that is a bug.
 | Privacy policy | `privacy/PrivacyPolicy` + `ui/privacy/PrivacyPolicyScreen` | Versioned, reviewable section list rendered in-app; reachable from home and onboarding |
 | Accessibility disclosure | `privacy/DisclosurePolicy` + `ui/privacy/AccessibilityDisclosureDialog` | Play prominent disclosure before the settings deep-link, accepted once and persisted |
 | Model catalogue | `models/SpeechModels` | sherpa-onnx entry with its license, archive URL, archive SHA-256 and per-file checksums/sizes; nothing bundled |
-| Model download | `models/KtorModelDownloader` | Ktor/OkHttp HTTPS GET with `Range` resume, 512 KiB progress steps, archive SHA-256 check, streaming `.tar.bz2` unpack that hashes each file while writing |
+| Model download | `models/KtorModelDownloader` + `models/ModelArchive` | Ktor/OkHttp HTTPS GET with `Range` resume, 512 KiB progress steps, archive SHA-256 check; the streaming `.tar.bz2` unpack hashes every entry while writing and fails the install rather than leaving a short file |
 | Model install state | `models/FileSpeechModelRepository` | App-scoped state machine `NotInstalled → Downloading → Verifying → Installing → Installed`; staging directory renamed into place only after every file verifies |
 | Model storage | `models/AppModelStorage` + `models/ModelStorageProbe` | App-private `filesDir/models`; pure archive-plus-unpacked-space decision, `formatBytes`, `StatFs` probe behind an interface |
 | On-device engine | `asr/StreamingAsrEngine` + `asr/SherpaOnnxStreamingEngine` | One recogniser for the app's lifetime (rebuilt only when paths/sample rate change), a fresh `OnlineStream` per dictation; endpointing stays Loqui's job |
@@ -253,6 +253,11 @@ with fakes, so no device or native library is needed:
   downloaded again; too little free space fails before any request
 - `ModelDownloaderHashTest` — `sha256Hex` matches the known digest of the fixture bytes and
   `toHex` pads values below `0x10`
+- `ModelArchiveTest` — the unpack path runs against a **real bzip2 + tar stream** built in
+  the test: all four catalogue files land at their exact bytes and hashes, the fp32 variants
+  and test wavs in the same archive are not installed, a short entry, a checksum mismatch and
+  a missing entry each fail the install and delete the file instead of leaving a 0-byte
+  model, and an archive wrapped in an extra directory is still matched
 - `SherpaOnnxAsrProviderTest` — a missing model reports `MODEL_UNAVAILABLE` without opening
   the engine; frames become de-duplicated partials plus one trimmed final; zero usable audio
   (empty flow or torn frames) reports `NO_SPEECH` instead of inventing text; an engine that
@@ -295,9 +300,19 @@ The re-test surfaced a second defect in the reporting, not the capture: the on-d
 failure was shown as "The provider rejected the request. Check your key", which is the
 cloud sentence and points at a key on-device mode does not use. `AsrFailure` is now mapped
 per mode (`asr/AsrFailureMessage`) so cloud wording is unreachable on-device, the gate moved
-to `0.003` (-50 dBFS) with an 8 s no-speech deadline, and a recogniser that returns an empty
-final result or throws after a partial now yields that partial instead of an error. Step 4
-is pending a re-test on the same device.
+to `0.0001` (-80 dBFS) with an 8 s no-speech deadline, and a recogniser that returns an empty
+final result or throws after a partial now yields that partial instead of an error.
+
+The third re-test failed again and the log read
+`Model sherpa-onnx-streaming-zipformer-en-20m: encoder 40 MB, decoder 0 MB, joiner 0 MB,
+tokens 0 MB`, which reads like an extract that only unpacked the encoder. It was a reporting
+bug: the line divided bytes by a whole mebibyte, so a healthy 539,499 B decoder and 5,048 B
+token table printed as `0 MB`. `SpeechModelRepository.paths` only hands out a directory whose
+four files match the catalogue **to the byte**, and `extractModelArchive` now has a test
+against a real tar.bz2, so a 0-byte file cannot be treated as installed — the extract had
+worked. That same run measured a last-frame RMS of 0.0003 against a 0.003 gate, so the gate
+moved to 0.0001 (-80 dBFS) and both capture and recogniser now log the session's **peak**
+RMS. Step 4 is pending a re-test on the same device.
 
 ### Dictation diagnostics (debug builds)
 
@@ -307,17 +322,26 @@ is pending a re-test on the same device.
 adb logcat -s AudioCaptureStream SpeechEndpointer SherpaOnnxAsrProvider VoiceInputService
 ```
 
-- `Captured N frames (N ms), last frame RMS 0.0xx` — microphone level, never audio. A level
-  under `0.003` is why the gate would not confirm onset.
+- `Captured N frames (N ms), last frame RMS 0.0003, peak 0.0003` — microphone level, never
+  audio. The peak is the loudest frame so far: compare it with the gate
+  (`VadConfig.speechRmsThreshold`, 0.0001). A peak under the gate is why onset would not
+  confirm; a peak that barely clears it is audio no recogniser can use.
+- `Microphone released after N frames (N ms), peak RMS 0.0003` — one line per session, even
+  when the utterance never started, so a quiet microphone is visible without a second run.
 - `Utterance closed by SILENCE_HANGOVER|MAX_DURATION|NO_SPEECH_TIMEOUT after N frames` —
   which ceiling ended the session, and how much audio reached the recogniser.
-- `Model <dir>: encoder .. MB, decoder .. MB, joiner .. MB, tokens .. B; ABI armv8l;
-  heap max .. MB` — proves the four installed files are complete, which ABI the process
-  picked, and how much headroom a 32-bit device has for ~44 MB of int8 graphs. `MISSING`
-  next to a file name means the extract did not finish.
-- `Recogniser ready in N ms`, `Audio ended: N frames, N ms, N partials`,
+- `Model <dir>: encoder 42845182 B (40.9 MB), decoder 539499 B (0.5 MB), joiner 259572 B
+  (0.2 MB), tokens 5048 B (0.0 MB); ABI armv8l; heap max .. MB` — exact bytes prove the four
+  installed files are complete (a size the catalogue disagrees with prints `expected N B`,
+  and a missing file prints `MISSING`), which ABI the process picked, and how much headroom
+  a 32-bit device has for ~44 MB of int8 graphs. Whole megabytes used to print the decoder
+  as `0 MB`, which looked like a broken extract.
+- `Unpacked <id>: encoder.onnx 42845182 B, decoder.onnx 539499 B, …` — the install's own
+  record of what each archive entry produced.
+- `Recogniser ready in N ms`, `Audio ended: N frames, N ms, N partials, peak RMS 0.0003`,
   `Final transcript: N chars` — the on-device path. `Audio ended: 0 frames` means nothing
-  was sent, which is reported to the user as "No speech detected".
+  was sent, which is reported to the user as "No speech detected"; a low peak there means the
+  recogniser was given silence.
 - `Could not open the on-device recogniser in N ms (java.lang.X: message)` — the exact
   throwable from sherpa-onnx with its stack trace, so a missing JNI symbol, an unreadable
   model and an `OutOfMemoryError` are told apart.

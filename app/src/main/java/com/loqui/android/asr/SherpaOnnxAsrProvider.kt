@@ -1,10 +1,14 @@
 package com.loqui.android.asr
 
+import com.loqui.android.audio.vad.Pcm16Signal
 import com.loqui.android.di.IoDispatcher
+import com.loqui.android.models.ModelFile
 import com.loqui.android.models.ModelPaths
 import com.loqui.android.models.SpeechModelRepository
+import com.loqui.android.models.SpeechModels
 import com.loqui.android.settings.AsrMode
 import java.io.File
+import java.util.Locale
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.CancellationException
@@ -82,6 +86,7 @@ class SherpaOnnxAsrProvider @Inject constructor(
             var frames = 0
             var samples = 0L
             var partials = 0
+            var peakRms = 0f
 
             try {
                 audio.collect { frame ->
@@ -93,6 +98,9 @@ class SherpaOnnxAsrProvider @Inject constructor(
 
                     frames++
                     samples += frameSamples.size
+                    // Level only, never audio: the number that says whether the recogniser
+                    // was given speech or a room tone it could never transcribe.
+                    peakRms = maxOf(peakRms, Pcm16Signal.rms(frame.pcm16))
                     session.accept(frameSamples, frame.sampleRateHz)
 
                     if (frames % LOG_EVERY_FRAMES == 0) {
@@ -119,10 +127,11 @@ class SherpaOnnxAsrProvider @Inject constructor(
                 }
 
                 Timber.d(
-                    "Audio ended: %d frames, %d ms, %d partials",
+                    "Audio ended: %d frames, %d ms, %d partials, peak RMS %.4f",
                     frames,
                     millisFor(samples),
                     partials,
+                    peakRms,
                 )
 
                 if (frames == 0) {
@@ -224,8 +233,21 @@ class SherpaOnnxAsrProvider @Inject constructor(
         )
     }
 
-    private fun describeFile(file: File): String =
-        if (file.isFile) "${file.length() / MB} MB" else "MISSING"
+    /**
+     * Exact bytes plus megabytes: whole megabytes printed the 539 KiB decoder and the 5 KiB
+     * token table as "0 MB", which reads like a broken extract when the install is healthy.
+     * A size the catalogue disagrees with is called out instead of rounded away.
+     */
+    private fun describeFile(file: File): String {
+        if (!file.isFile) return "MISSING"
+
+        val bytes = file.length()
+        val expected = SpeechModels.onDeviceDefault.file(file.name)?.sizeBytes
+        if (expected != null && bytes != expected) {
+            return "$bytes B, expected $expected B"
+        }
+        return "$bytes B (${String.format(Locale.US, "%.1f", bytes.toDouble() / MB)} MB)"
+    }
 
     /** Class and message on one line, so a filtered capture still shows what threw. */
     private fun describeFailure(throwable: Throwable): String = buildString {

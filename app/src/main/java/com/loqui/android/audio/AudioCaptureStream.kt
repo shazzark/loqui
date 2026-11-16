@@ -41,6 +41,7 @@ class AudioCaptureStream @Inject constructor(
         val chunk = ByteArray(READ_CHUNK_BYTES)
         val sampleRateHz = AudioFrame.SAMPLE_RATE_HZ
         var frames = 0
+        var peakRms = 0f
 
         try {
             source.start()
@@ -62,14 +63,17 @@ class AudioCaptureStream @Inject constructor(
                 while (ring.availableBytes >= FRAME_BYTES) {
                     val frame = ring.readFrame(FRAME_BYTES) ?: break
                     frames++
+                    val frameRms = Pcm16Signal.rms(frame)
+                    if (frameRms > peakRms) peakRms = frameRms
                     if (frames % LOG_EVERY_FRAMES == 0) {
                         // Level, never audio: this is the number that explains a
                         // session that never endpoints on a quiet or noisy device.
                         Timber.d(
-                            "Captured %d frames (%d ms), last frame RMS %.4f",
+                            "Captured %d frames (%d ms), last frame RMS %.4f, peak %.4f",
                             frames,
                             frames * FRAME_MS,
-                            Pcm16Signal.rms(frame),
+                            frameRms,
+                            peakRms,
                         )
                     }
                     emit(AudioFrame(frame, sampleRateHz))
@@ -77,7 +81,14 @@ class AudioCaptureStream @Inject constructor(
             }
         } finally {
             source.release()
-            Timber.d("Microphone released after %d frames (%d ms)", frames, frames * FRAME_MS)
+            // One line per session with the loudest frame that was ever delivered: a peak
+            // below the VAD gate means the microphone never gave the gate a chance.
+            Timber.d(
+                "Microphone released after %d frames (%d ms), peak RMS %.4f",
+                frames,
+                frames * FRAME_MS,
+                peakRms,
+            )
         }
     }.flowOn(ioDispatcher)
 

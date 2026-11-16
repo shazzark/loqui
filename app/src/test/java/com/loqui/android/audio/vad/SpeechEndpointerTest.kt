@@ -137,7 +137,9 @@ class SpeechEndpointerTest {
             "the gate must sit below what a phone mic delivers at arm's length",
             defaults.speechRmsThreshold <= 0.01f,
         )
-        assertEquals(0.003f, defaults.speechRmsThreshold, 0f)
+        // A Galaxy A13 delivers ~0.0003 RMS for speech through VOICE_RECOGNITION; the gate
+        // has to stay below that or onset never confirms and no audio reaches the model.
+        assertEquals(0.0001f, defaults.speechRmsThreshold, 0f)
     }
 
     @Test

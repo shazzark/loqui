@@ -6,12 +6,12 @@ package com.loqui.android.audio.vad
  *
  * @param frameDurationMs audio carried by one frame; must match the capture stream.
  * @param speechRmsThreshold normalised RMS (0..1) above which a frame counts as speech.
- *   `0.003` is about -50 dBFS. Phone microphones differ by roughly an order of magnitude
- *   once the platform's `VOICE_RECOGNITION` chain has applied its noise suppression, and
- *   both `0.015` and `0.008` sat above what a Galaxy A13 delivers at arm's length: onset
- *   never confirmed, so no audio ever reached the recogniser. Too low is the cheaper
- *   failure: room noise trips the onset and the utterance ends at the duration ceiling,
- *   which still produces a transcript.
+ *   `0.0001` is about -80 dBFS: deliberately below the noise floor of a phone microphone
+ *   whose `VOICE_RECOGNITION` chain has gated a quiet speaker, because a Galaxy A13 was
+ *   measured at ~0.0003 last-frame RMS. Every earlier value (`0.015`, `0.008`, `0.003`)
+ *   sat above that and stopped the onset from confirming, so no audio ever reached the
+ *   recogniser. Too low is the cheaper failure: room noise trips the onset and the
+ *   utterance ends at the duration ceiling, which still produces a transcript.
  * @param onsetFrames consecutive speech frames needed before an utterance starts;
  *   filters single-frame clicks and key taps.
  * @param silenceHangoverFrames consecutive silent frames that end the utterance;
@@ -25,7 +25,7 @@ package com.loqui.android.audio.vad
  */
 data class VadConfig(
     val frameDurationMs: Int = 20,
-    val speechRmsThreshold: Float = 0.003f,
+    val speechRmsThreshold: Float = 0.0001f,
     val onsetFrames: Int = 3,
     val silenceHangoverFrames: Int = 40,
     val maxUtteranceMs: Int = 15_000,
