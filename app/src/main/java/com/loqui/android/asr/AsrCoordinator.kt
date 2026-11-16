@@ -17,7 +17,11 @@ sealed interface AsrSessionEvent {
     /** Cloud mode selected, but no user key: show the "add your key" state. */
     data object NeedsKey : AsrSessionEvent
 
-    data class Failed(val reason: AsrFailure) : AsrSessionEvent
+    /**
+     * A session failed. [mode] travels with the reason because the message depends on it:
+     * the same [AsrFailure.PROVIDER_ERROR] must never mention a key on the on-device path.
+     */
+    data class Failed(val reason: AsrFailure, val mode: AsrMode) : AsrSessionEvent
 }
 
 /**
@@ -56,19 +60,21 @@ class AsrCoordinator @Inject constructor(
                             is AsrEvent.Partial -> Unit
                             is AsrEvent.Final ->
                                 emit(AsrSessionEvent.Transcript(event.text, provider.mode))
-                            is AsrEvent.Failure -> emit(AsrSessionEvent.Failed(event.reason))
+                            is AsrEvent.Failure ->
+                                emit(AsrSessionEvent.Failed(event.reason, provider.mode))
                         }
                     }
                 }
 
                 if (finished == null) {
                     Timber.w("ASR session exceeded the %d ms hard limit", sessionHardLimitMs)
-                    emit(AsrSessionEvent.Failed(AsrFailure.NETWORK_TIMEOUT))
+                    emit(AsrSessionEvent.Failed(AsrFailure.NETWORK_TIMEOUT, provider.mode))
                 }
             }
 
             AsrAvailability.MissingKey -> emit(AsrSessionEvent.NeedsKey)
-            AsrAvailability.ModelMissing -> emit(AsrSessionEvent.Failed(AsrFailure.MODEL_UNAVAILABLE))
+            AsrAvailability.ModelMissing ->
+                emit(AsrSessionEvent.Failed(AsrFailure.MODEL_UNAVAILABLE, provider.mode))
         }
     }
 

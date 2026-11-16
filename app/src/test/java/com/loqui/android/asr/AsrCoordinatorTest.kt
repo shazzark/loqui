@@ -82,7 +82,10 @@ class AsrCoordinatorTest {
         )
 
         wedged.transcribe(silence(), sessionHardLimitMs = 100).test {
-            assertEquals(AsrSessionEvent.Failed(AsrFailure.NETWORK_TIMEOUT), awaitItem())
+            assertEquals(
+                AsrSessionEvent.Failed(AsrFailure.NETWORK_TIMEOUT, AsrMode.ON_DEVICE),
+                awaitItem(),
+            )
             awaitComplete()
         }
     }

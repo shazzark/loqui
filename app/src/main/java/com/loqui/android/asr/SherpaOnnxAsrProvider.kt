@@ -1,8 +1,10 @@
 package com.loqui.android.asr
 
 import com.loqui.android.di.IoDispatcher
+import com.loqui.android.models.ModelPaths
 import com.loqui.android.models.SpeechModelRepository
 import com.loqui.android.settings.AsrMode
+import java.io.File
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.CancellationException
@@ -50,13 +52,23 @@ class SherpaOnnxAsrProvider @Inject constructor(
         }
 
         sessionLock.withLock {
+            logEnvironment(paths)
+
             val openStartedAt = System.currentTimeMillis()
             val session = try {
                 engine.open(paths, AudioFrame.SAMPLE_RATE_HZ)
             } catch (cancellation: CancellationException) {
                 throw cancellation
             } catch (throwable: Throwable) {
-                Timber.w(throwable, "Could not open the on-device recogniser")
+                // A recogniser that will not open is the failure a logcat line has to nail
+                // down: a missing JNI symbol, a truncated model file and a 32-bit
+                // address-space limit all end here and all look like "no transcript".
+                Timber.e(
+                    throwable,
+                    "Could not open the on-device recogniser in %d ms (%s)",
+                    System.currentTimeMillis() - openStartedAt,
+                    describeFailure(throwable),
+                )
                 emit(AsrEvent.Failure(AsrFailure.PROVIDER_ERROR))
                 return@withLock
             }
@@ -66,12 +78,12 @@ class SherpaOnnxAsrProvider @Inject constructor(
                 paths.directory.name,
             )
 
-            try {
-                var lastPartial = ""
-                var frames = 0
-                var samples = 0L
-                var partials = 0
+            var lastPartial = ""
+            var frames = 0
+            var samples = 0L
+            var partials = 0
 
+            try {
                 audio.collect { frame ->
                     val frameSamples = pcm16ToFloatSamples(frame.pcm16)
                     if (frameSamples.isEmpty()) {
@@ -122,12 +134,26 @@ class SherpaOnnxAsrProvider @Inject constructor(
                 }
 
                 session.finish()
-                val finalText = drain(session).trim()
+                val tail = drain(session).trim()
+
+                // Streaming decoders can settle on nothing after `inputFinished()` even
+                // though they had text a frame earlier. The last partial is still the best
+                // available transcript, so it becomes the final result instead of a failure
+                // the user cannot act on.
+                val finalText = tail.ifEmpty { lastPartial.trim() }
+                if (tail.isEmpty() && finalText.isNotEmpty()) {
+                    Timber.w(
+                        "Empty final result; falling back to the last partial (%d chars)",
+                        finalText.length,
+                    )
+                }
+
                 if (finalText.isEmpty()) {
                     Timber.w(
-                        "Recogniser produced no text from %d frames (%d ms)",
+                        "Recogniser produced no text from %d frames (%d ms, %d partials)",
                         frames,
                         millisFor(samples),
+                        partials,
                     )
                     emit(AsrEvent.Failure(AsrFailure.PROVIDER_ERROR))
                 } else {
@@ -142,8 +168,26 @@ class SherpaOnnxAsrProvider @Inject constructor(
             } catch (cancellation: CancellationException) {
                 throw cancellation
             } catch (throwable: Throwable) {
-                Timber.w(throwable, "On-device recognition failed")
-                emit(AsrEvent.Failure(AsrFailure.PROVIDER_ERROR))
+                if (lastPartial.isBlank()) {
+                    Timber.e(
+                        throwable,
+                        "On-device recognition failed after %d frames with no text (%s)",
+                        frames,
+                        describeFailure(throwable),
+                    )
+                    emit(AsrEvent.Failure(AsrFailure.PROVIDER_ERROR))
+                } else {
+                    // Keep what was recognised before the failure: a partial transcript is
+                    // still useful, an error toast is not.
+                    Timber.e(
+                        throwable,
+                        "On-device recognition failed after %d frames; emitting the last " +
+                            "partial (%d chars)",
+                        frames,
+                        lastPartial.length,
+                    )
+                    emit(AsrEvent.Final(lastPartial.trim()))
+                }
             } finally {
                 session.release()
             }
@@ -159,8 +203,40 @@ class SherpaOnnxAsrProvider @Inject constructor(
         return session.text()
     }
 
+    /**
+     * The numbers needed to explain a recogniser that will not run on a real phone: the
+     * installed files (a truncated extract shows up here as a size), the process ABI, and
+     * the heap a 32-bit device has left for ~44 MB of int8 graphs.
+     */
+    private fun logEnvironment(paths: ModelPaths) {
+        val runtime = Runtime.getRuntime()
+        Timber.d(
+            "Model %s: encoder %s, decoder %s, joiner %s, tokens %s; ABI %s; " +
+                "heap max %d MB, used %d MB",
+            paths.directory.name,
+            describeFile(paths.encoder),
+            describeFile(paths.decoder),
+            describeFile(paths.joiner),
+            describeFile(paths.tokens),
+            System.getProperty("os.arch"),
+            runtime.maxMemory() / MB,
+            (runtime.totalMemory() - runtime.freeMemory()) / MB,
+        )
+    }
+
+    private fun describeFile(file: File): String =
+        if (file.isFile) "${file.length() / MB} MB" else "MISSING"
+
+    /** Class and message on one line, so a filtered capture still shows what threw. */
+    private fun describeFailure(throwable: Throwable): String = buildString {
+        append(throwable.javaClass.name)
+        throwable.message?.let { append(": ").append(it) }
+    }
+
     private companion object {
         /** One diagnostic line per second of audio (50 frames of 20 ms). */
         const val LOG_EVERY_FRAMES = 50
+
+        const val MB = 1024L * 1024L
     }
 }

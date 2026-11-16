@@ -39,7 +39,7 @@ that is a bug.
 | Microphone owner | `capture/VoiceInputService` | `microphone` foreground service; the only recorder |
 | Capture | `audio/AudioCaptureStream` + `audio/AudioRecordPcmSource` | `AudioRecord` 16 kHz mono PCM-16, 20 ms frames, released as soon as collection stops |
 | Ring buffer | `audio/AudioRingBuffer` | Bounded circular buffer between the blocking read and the consumer; drops oldest audio and counts the loss |
-| Endpointing | `audio/vad/SpeechEndpointer` + `audio/vad/EnergyVad` | Onset (60 ms above 0.008 RMS, ≈ -42 dBFS) → speech → hangover (800 ms) → utterance complete; a session also closes after 5 s without speech and is cut at 15 s, so a mis-tuned gate can never hold the bubble |
+| Endpointing | `audio/vad/SpeechEndpointer` + `audio/vad/EnergyVad` | Onset (60 ms above 0.003 RMS, ≈ -50 dBFS) → speech → hangover (800 ms) → utterance complete; a session also closes after 8 s without speech and is cut at 15 s, so a mis-tuned gate can never hold the bubble |
 | Floating trigger | `trigger/BubbleService` + `BubbleController` | `specialUse` overlay service: draggable disc, tap toggles capture, never records audio or touches the network |
 | Bubble states | `trigger/BubbleAppearance` | Pure mapping `CaptureState` → accent, short label, spinner, pulse; the only `View` code lives in `BubbleController` |
 | Recognition | `asr/AsrCoordinator`, `asr/AsrProviderFactory` | `asr/SherpaOnnxAsrProvider` on-device (sherpa-onnx streaming Zipformer, int8); `asr/cloud/CloudAsrProvider` for opt-in cloud, gated on the user's key |
@@ -114,11 +114,19 @@ Design rules that later phases must not break:
 - `availability()` reports `MissingKey` exactly when a cloud mode lacks a key
 - a wedged provider hits the session hard limit instead of holding the microphone
 
+`app/src/test/.../asr/AsrFailureMessageTest.kt` guards the wording, because the message is
+the only part of a failure the user sees:
+
+- no `AsrFailure` produces key or provider wording in on-device mode
+- `PROVIDER_ERROR` and `MISSING_KEY` both read as a plain on-device failure
+- cloud mode keeps its provider/key/timeout wording, and silence/model/cancel read the
+  same in both modes
+
 `app/src/test/.../audio/` covers the capture pipeline:
 
 - `AudioRingBufferTest` — wrap-around ordering, overflow drops the oldest bytes, frames never split
 - `AudioCaptureStreamTest` — one 20 ms frame per read, partial reads reassembled, mic released on end *and* on cancellation
-- `SpeechEndpointerTest` — silence and single-frame clicks open nothing, onset + hangover emits exactly the utterance, endpoint stops pulling audio, a session with no speech closes at the 5 s deadline, and the ceiling cuts long speech
+- `SpeechEndpointerTest` — silence and single-frame clicks open nothing, onset + hangover emits exactly the utterance, endpoint stops pulling audio, a session with no speech closes at the 8 s deadline, and the ceiling cuts long speech
 - `AudioPipelineTest` — scripted microphone → ring buffer → VAD → provider → final transcript
 - `CloudAsrProviderTest` — `MissingKey` with no request, key carries the utterance, rejections are not retried, timeouts are retried then surface
 
@@ -248,7 +256,9 @@ with fakes, so no device or native library is needed:
 - `SherpaOnnxAsrProviderTest` — a missing model reports `MODEL_UNAVAILABLE` without opening
   the engine; frames become de-duplicated partials plus one trimmed final; zero usable audio
   (empty flow or torn frames) reports `NO_SPEECH` instead of inventing text; an engine that
-  throws surfaces `PROVIDER_ERROR` and still releases the session
+  throws surfaces `PROVIDER_ERROR` and still releases the session; an empty final result or a
+  decode failure after speech falls back to the last partial instead of discarding the
+  dictation
 - `Pcm16Test` — little-endian PCM-16 converts to floats in `[-1, 1]`, and an odd trailing
   byte is dropped rather than read past the end of the frame
 - `AsrProviderFactoryTest` — on-device returns the injected app-scoped provider, cloud is
@@ -278,9 +288,16 @@ pass — the archive downloads and verifies, all four files unpack, and the nati
 `libsherpa-onnx-jni.so` loads. Step 4 did not: the bubble stayed on "Listening" and no
 transcript arrived. Cause: the energy gate (`0.015`) sat above what that microphone delivers
 through `VOICE_RECOGNITION`, so onset never confirmed, no frame reached the recogniser and
-the only exit was the 60 s ASR hard limit. Fixed by lowering the gate to `0.008`, closing a
-session after 5 s without speech, cutting an utterance at 15 s, and adding the diagnostics
-below. Step 4 is pending a re-test on the same device.
+the only exit was the 60 s ASR hard limit. Fixed by lowering the gate, closing a session
+that never hears speech, cutting an utterance at 15 s, and adding the diagnostics below.
+
+The re-test surfaced a second defect in the reporting, not the capture: the on-device
+failure was shown as "The provider rejected the request. Check your key", which is the
+cloud sentence and points at a key on-device mode does not use. `AsrFailure` is now mapped
+per mode (`asr/AsrFailureMessage`) so cloud wording is unreachable on-device, the gate moved
+to `0.003` (-50 dBFS) with an 8 s no-speech deadline, and a recogniser that returns an empty
+final result or throws after a partial now yields that partial instead of an error. Step 4
+is pending a re-test on the same device.
 
 ### Dictation diagnostics (debug builds)
 
@@ -291,12 +308,21 @@ adb logcat -s AudioCaptureStream SpeechEndpointer SherpaOnnxAsrProvider VoiceInp
 ```
 
 - `Captured N frames (N ms), last frame RMS 0.0xx` — microphone level, never audio. A level
-  under `0.008` is why the gate would not confirm onset.
+  under `0.003` is why the gate would not confirm onset.
 - `Utterance closed by SILENCE_HANGOVER|MAX_DURATION|NO_SPEECH_TIMEOUT after N frames` —
   which ceiling ended the session, and how much audio reached the recogniser.
+- `Model <dir>: encoder .. MB, decoder .. MB, joiner .. MB, tokens .. B; ABI armv8l;
+  heap max .. MB` — proves the four installed files are complete, which ABI the process
+  picked, and how much headroom a 32-bit device has for ~44 MB of int8 graphs. `MISSING`
+  next to a file name means the extract did not finish.
 - `Recogniser ready in N ms`, `Audio ended: N frames, N ms, N partials`,
   `Final transcript: N chars` — the on-device path. `Audio ended: 0 frames` means nothing
   was sent, which is reported to the user as "No speech detected".
+- `Could not open the on-device recogniser in N ms (java.lang.X: message)` — the exact
+  throwable from sherpa-onnx with its stack trace, so a missing JNI symbol, an unreadable
+  model and an `OutOfMemoryError` are told apart.
+- `Empty final result; falling back to the last partial (N chars)` — the decoder settled on
+  nothing after `inputFinished()`; the partial is used instead.
 - `No endpoint after 30000 ms; the microphone stopped delivering audio` — the service
   watchdog fired because no frames arrived at all.
 

@@ -19,7 +19,9 @@ import com.loqui.android.MainActivity
 import com.loqui.android.R
 import com.loqui.android.asr.AsrCoordinator
 import com.loqui.android.asr.AsrFailure
+import com.loqui.android.asr.AsrFailureMessage
 import com.loqui.android.asr.AsrSessionEvent
+import com.loqui.android.asr.messageFor
 import com.loqui.android.audio.AudioCaptureStream
 import com.loqui.android.audio.vad.SpeechEndpointer
 import com.loqui.android.di.ApplicationScope
@@ -31,6 +33,7 @@ import com.loqui.android.insertion.InsertRoute
 import com.loqui.android.insertion.TextInserter
 import com.loqui.android.llm.CorrectionOutcome
 import com.loqui.android.llm.LlmCoordinator
+import com.loqui.android.settings.AsrMode
 import dagger.hilt.android.AndroidEntryPoint
 import javax.inject.Inject
 import kotlinx.coroutines.CancellationException
@@ -146,7 +149,7 @@ class VoiceInputService : Service() {
             val stallWatch = launch { watchForStalledAudio() }
             try {
                 // Mic -> ring buffer -> VAD. The endpointer completes the flow at the
-                // utterance endpoint (silence, 15 s ceiling, or 5 s without speech),
+                // utterance endpoint (silence, 15 s ceiling, or 8 s without speech),
                 // which stops capture and releases the mic.
                 val utterance = speechEndpointer.segment(audioCaptureStream.frames())
                 Timber.d("Utterance flow ready; handing it to the ASR provider")
@@ -178,7 +181,7 @@ class VoiceInputService : Service() {
      * Last-resort guard for a session that never reaches an endpoint.
      *
      * A healthy session leaves [CaptureState.Listening] within the endpointer's own
-     * ceilings (15 s of speech, 5 s of silence), so still listening after
+     * ceilings (15 s of speech, 8 s of silence), so still listening after
      * [SESSION_WATCHDOG_MS] means the microphone stopped delivering frames. Cancelling
      * the job releases the microphone and takes the bubble out of "Listening"; the
      * frame ceilings in [SpeechEndpointer] are what guarantee the captured audio still
@@ -223,8 +226,8 @@ class VoiceInputService : Service() {
             }
 
             is AsrSessionEvent.Failed -> {
-                Timber.w("ASR session failed: %s", event.reason)
-                publish(CaptureState.Error(describe(event.reason)))
+                Timber.w("ASR session failed: %s (%s)", event.reason, event.mode)
+                publish(CaptureState.Error(describe(event.reason, event.mode)))
             }
 
             is AsrSessionEvent.Transcript -> {
@@ -376,14 +379,18 @@ class VoiceInputService : Service() {
         Manifest.permission.RECORD_AUDIO,
     ) == PackageManager.PERMISSION_GRANTED
 
-    private fun describe(reason: AsrFailure): String = when (reason) {
-        AsrFailure.NETWORK_TIMEOUT -> getString(R.string.asr_error_network_timeout)
-        AsrFailure.PROVIDER_ERROR -> getString(R.string.asr_error_provider)
-        AsrFailure.CANCELLED -> getString(R.string.asr_error_cancelled)
-        AsrFailure.MODEL_UNAVAILABLE -> getString(R.string.asr_error_model_missing)
-        AsrFailure.MISSING_KEY -> getString(R.string.asr_error_missing_key)
-        AsrFailure.NO_SPEECH -> getString(R.string.asr_error_no_speech)
-    }
+    private fun describe(reason: AsrFailure, mode: AsrMode): String = getString(
+        when (messageFor(reason, mode)) {
+            AsrFailureMessage.ON_DEVICE_FAILED -> R.string.asr_error_on_device_failed
+            AsrFailureMessage.ON_DEVICE_TIMEOUT -> R.string.asr_error_on_device_timeout
+            AsrFailureMessage.NETWORK_TIMEOUT -> R.string.asr_error_network_timeout
+            AsrFailureMessage.CLOUD_REJECTED -> R.string.asr_error_provider
+            AsrFailureMessage.CLOUD_KEY_MISSING -> R.string.asr_error_missing_key
+            AsrFailureMessage.MODEL_MISSING -> R.string.asr_error_model_missing
+            AsrFailureMessage.NO_SPEECH -> R.string.asr_error_no_speech
+            AsrFailureMessage.CANCELLED -> R.string.asr_error_cancelled
+        },
+    )
 
     companion object {
         const val ACTION_START_CAPTURE = "com.loqui.android.action.START_CAPTURE"

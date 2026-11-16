@@ -112,12 +112,14 @@
     <string name="capture_error_background_blocked">Android blocked background recording. Open Loqui and dictate from the app.</string>
     <string name="capture_error_generic">Dictation failed. Try again.</string>
 
-    <string name="asr_error_network_timeout">The provider took too long to respond.</string>
-    <string name="asr_error_provider">The provider rejected the request. Check your key.</string>
+    <string name="asr_error_network_timeout">The cloud provider took too long to respond.</string>
+    <string name="asr_error_provider">The cloud provider rejected the request. Check your key.</string>
     <string name="asr_error_cancelled">Dictation cancelled.</string>
     <string name="asr_error_model_missing">The on-device model is not downloaded yet.</string>
     <string name="asr_error_missing_key">Cloud mode needs your API key. Add it in Loqui settings.</string>
     <string name="asr_error_no_speech">No speech detected. Check the microphone and try again.</string>
+    <string name="asr_error_on_device_failed">On-device transcription failed. Please try again.</string>
+    <string name="asr_error_on_device_timeout">On-device transcription took too long. Try again.</string>
 
     <!-- Phase 5: foreground-service hardening -->
     <string name="capture_error_foreground_denied">Android refused to keep the microphone service running. Open Loqui and dictate from the app.</string>

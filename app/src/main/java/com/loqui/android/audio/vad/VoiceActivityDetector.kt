@@ -25,7 +25,7 @@ interface VoiceActivityDetector {
  * capture → endpointer → ASR path end to end; the accuracy-critical Silero model
  * slots in behind [VoiceActivityDetector] when the on-device runtime lands.
  *
- * The default gate is [VadConfig]'s, deliberately low (-42 dBFS): a threshold that is
+ * The default gate is [VadConfig]'s, deliberately low (-50 dBFS): a threshold that is
  * too high does not degrade quietly, it stops the onset from ever confirming and the
  * session runs until a timeout. Background noise above the gate is the cheaper failure:
  * the utterance still closes at the 15 s ceiling.

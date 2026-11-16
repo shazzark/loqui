@@ -105,6 +105,28 @@ class SherpaOnnxAsrProviderTest {
         )
     }
     @Test
+    fun `an empty final result falls back to the last partial`() = runTest {
+        val provider = provider(paths = paths, engine = FakeEngine(emptyTail = true))
+
+        assertEquals(
+            listOf(AsrEvent.Partial("hello 2"), AsrEvent.Final("hello 2")),
+            provider.transcribe(flowOf(frame(2))).toList(),
+        )
+    }
+
+    @Test
+    fun `a decode failure after speech still emits the partial transcript`() = runTest {
+        val engine = FakeEngine(failAfterAcceptedSamples = 2)
+        val provider = provider(paths = paths, engine = engine)
+
+        assertEquals(
+            listOf(AsrEvent.Partial("hello 2"), AsrEvent.Final("hello 2")),
+            provider.transcribe(flowOf(frame(2), frame(2))).toList(),
+        )
+        assertTrue(engine.session.released)
+    }
+
+    @Test
     fun `a recogniser that cannot open fails without leaking a session`() = runTest {
         val engine = FakeEngine(failToOpen = true)
         val provider = provider(paths = paths, engine = engine)
@@ -154,11 +176,18 @@ class SherpaOnnxAsrProviderTest {
         private val textForSamples: (Int) -> String = { "hello $it" },
         private val failToOpen: Boolean = false,
         private val failOnAccept: Boolean = false,
+        private val failAfterAcceptedSamples: Int = Int.MAX_VALUE,
+        private val emptyTail: Boolean = false,
     ) : StreamingAsrEngine {
 
         var opened = false
         var openedPaths: ModelPaths? = null
-        val session = FakeSession(textForSamples, failOnAccept)
+        val session = FakeSession(
+            textForSamples = textForSamples,
+            failOnAccept = failOnAccept,
+            failAfterAcceptedSamples = failAfterAcceptedSamples,
+            emptyTail = emptyTail,
+        )
 
         override fun open(paths: ModelPaths, sampleRateHz: Int): StreamingAsrSession {
             opened = true
@@ -171,6 +200,8 @@ class SherpaOnnxAsrProviderTest {
     private class FakeSession(
         private val textForSamples: (Int) -> String,
         private val failOnAccept: Boolean,
+        private val failAfterAcceptedSamples: Int,
+        private val emptyTail: Boolean,
     ) : StreamingAsrSession {
 
         var acceptedSamples = 0
@@ -185,6 +216,9 @@ class SherpaOnnxAsrProviderTest {
             if (failOnAccept) throw IllegalStateException("decode exploded")
             acceptedSamples += samples.size
             this.sampleRateHz = sampleRateHz
+            if (acceptedSamples > failAfterAcceptedSamples) {
+                throw IllegalStateException("decode exploded after $acceptedSamples samples")
+            }
             text = textForSamples(acceptedSamples)
             pending = text.isNotEmpty()
         }
@@ -199,6 +233,7 @@ class SherpaOnnxAsrProviderTest {
 
         override fun finish() {
             finished = true
+            if (emptyTail) text = ""
             pending = text.isNotEmpty()
         }
 
