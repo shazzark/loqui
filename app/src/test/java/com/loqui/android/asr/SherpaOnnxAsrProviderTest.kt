@@ -85,22 +85,22 @@ class SherpaOnnxAsrProviderTest {
     }
 
     @Test
-    fun `a torn frame is dropped before it reaches the recogniser`() = runTest {
+    fun `torn frames leave no audio and are reported as no speech`() = runTest {
         val engine = FakeEngine()
         val provider = provider(paths = paths, engine = engine)
 
         val events = provider.transcribe(flowOf(AudioFrame(ByteArray(1)))).toList()
 
-        assertEquals(listOf(AsrEvent.Failure(AsrFailure.PROVIDER_ERROR)), events)
+        assertEquals(listOf(AsrEvent.Failure(AsrFailure.NO_SPEECH)), events)
         assertEquals(0, engine.session.acceptedSamples)
     }
 
     @Test
-    fun `an empty audio flow fails rather than finishing on a blank result`() = runTest {
+    fun `an empty audio flow reports no speech rather than a blank result`() = runTest {
         val provider = provider(paths = paths, engine = FakeEngine())
 
         assertEquals(
-            listOf(AsrEvent.Failure(AsrFailure.PROVIDER_ERROR)),
+            listOf(AsrEvent.Failure(AsrFailure.NO_SPEECH)),
             provider.transcribe(flowOf()).toList(),
         )
     }

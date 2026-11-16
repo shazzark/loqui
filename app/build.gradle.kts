@@ -16,10 +16,11 @@ android {
         versionCode = 1
         versionName = "0.1.0-phase6"
 
-        // sherpa-onnx ships four ABIs. Phones are arm64 and emulators x86_64; shipping
-        // the two 32-bit sets as well would double the APK for no supported target.
+        // sherpa-onnx ships four ABIs. arm64-v8a is every current phone, armeabi-v7a covers
+        // 32-bit devices (the Galaxy A13 test unit reports it), x86_64 is the emulator; x86
+        // is the only one left out.
         ndk {
-            abiFilters += listOf("arm64-v8a", "x86_64")
+            abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64")
         }
     }
 

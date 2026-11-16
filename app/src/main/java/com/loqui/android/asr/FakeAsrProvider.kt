@@ -50,8 +50,9 @@ class FakeAsrProvider(
         }
 
         if (frames == 0) {
-            // Never invent a transcript for an empty utterance.
-            emit(AsrEvent.Failure(AsrFailure.PROVIDER_ERROR))
+            // Never invent a transcript for an empty utterance. The endpointer closes a
+            // silent session on purpose, so this is "no speech", not a broken provider.
+            emit(AsrEvent.Failure(AsrFailure.NO_SPEECH))
             return@flow
         }
 

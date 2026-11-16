@@ -143,13 +143,17 @@ class VoiceInputService : Service() {
         captureJob = serviceScope.launch {
             captureStateHolder.update(CaptureState.Listening)
             val permissionWatch = launch { watchMicrophonePermission() }
+            val stallWatch = launch { watchForStalledAudio() }
             try {
                 // Mic -> ring buffer -> VAD. The endpointer completes the flow at the
-                // utterance endpoint, which stops capture and releases the mic.
+                // utterance endpoint (silence, 15 s ceiling, or 5 s without speech),
+                // which stops capture and releases the mic.
                 val utterance = speechEndpointer.segment(audioCaptureStream.frames())
+                Timber.d("Utterance flow ready; handing it to the ASR provider")
                 asrCoordinator.transcribe(utterance).collect { event ->
                     handleSessionEvent(event)
                 }
+                Timber.d("ASR session ended without an outcome")
             } catch (cancellation: CancellationException) {
                 // Session cancelled (bubble stop, service destroy): not a failure.
                 Timber.d("Capture session cancelled")
@@ -164,9 +168,32 @@ class VoiceInputService : Service() {
                 publish(CaptureState.Error(getString(R.string.capture_error_generic)))
             } finally {
                 permissionWatch.cancel()
+                stallWatch.cancel()
                 endSession()
             }
         }
+    }
+
+    /**
+     * Last-resort guard for a session that never reaches an endpoint.
+     *
+     * A healthy session leaves [CaptureState.Listening] within the endpointer's own
+     * ceilings (15 s of speech, 5 s of silence), so still listening after
+     * [SESSION_WATCHDOG_MS] means the microphone stopped delivering frames. Cancelling
+     * the job releases the microphone and takes the bubble out of "Listening"; the
+     * frame ceilings in [SpeechEndpointer] are what guarantee the captured audio still
+     * reaches the recogniser.
+     */
+    private suspend fun watchForStalledAudio() {
+        delay(SESSION_WATCHDOG_MS)
+        if (captureStateHolder.state.value != CaptureState.Listening) return
+
+        Timber.w(
+            "No endpoint after %d ms; the microphone stopped delivering audio",
+            SESSION_WATCHDOG_MS,
+        )
+        publish(CaptureState.Error(getString(R.string.capture_error_audio_stalled)))
+        captureJob?.cancel()
     }
 
     /**
@@ -190,9 +217,21 @@ class VoiceInputService : Service() {
 
     private suspend fun handleSessionEvent(event: AsrSessionEvent) {
         when (event) {
-            AsrSessionEvent.NeedsKey -> publish(CaptureState.NeedsKey)
-            is AsrSessionEvent.Failed -> publish(CaptureState.Error(describe(event.reason)))
-            is AsrSessionEvent.Transcript -> insert(event.text)
+            AsrSessionEvent.NeedsKey -> {
+                Timber.d("ASR session needs a cloud key")
+                publish(CaptureState.NeedsKey)
+            }
+
+            is AsrSessionEvent.Failed -> {
+                Timber.w("ASR session failed: %s", event.reason)
+                publish(CaptureState.Error(describe(event.reason)))
+            }
+
+            is AsrSessionEvent.Transcript -> {
+                // Length only: the transcript is never logged.
+                Timber.d("Transcript ready (%d chars)", event.text.length)
+                insert(event.text)
+            }
         }
     }
 
@@ -251,6 +290,12 @@ class VoiceInputService : Service() {
 
     /** Drops the foreground state and lets the bubble show the outcome for a moment. */
     private fun endSession() {
+        if (captureStateHolder.state.value == CaptureState.Listening) {
+            // No event ever reached the UI: without this the bubble would stay on
+            // "Listening" while the service is already gone.
+            Timber.w("Session ended while the bubble was still listening")
+            captureStateHolder.reset()
+        }
         if (isForeground) {
             ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
             isForeground = false
@@ -337,6 +382,7 @@ class VoiceInputService : Service() {
         AsrFailure.CANCELLED -> getString(R.string.asr_error_cancelled)
         AsrFailure.MODEL_UNAVAILABLE -> getString(R.string.asr_error_model_missing)
         AsrFailure.MISSING_KEY -> getString(R.string.asr_error_missing_key)
+        AsrFailure.NO_SPEECH -> getString(R.string.asr_error_no_speech)
     }
 
     companion object {
@@ -350,6 +396,12 @@ class VoiceInputService : Service() {
 
         /** How often a running session re-checks the microphone grant. */
         private const val PERMISSION_POLL_MS = 500L
+
+        /**
+         * Wall-clock backstop for a session that never endpoints. Twice the endpointer's
+         * 15 s ceiling, so a slow device that is still processing is not cut off.
+         */
+        private const val SESSION_WATCHDOG_MS = 30_000L
 
         /**
          * Starts a dictation session; the service owns the microphone itself.

@@ -29,10 +29,10 @@ class FakeAsrProviderTest {
     }
 
     @Test
-    fun `an empty stream fails instead of inventing a transcript`() = runTest {
+    fun `an empty stream reports no speech instead of inventing a transcript`() = runTest {
         val events = provider.transcribe(emptyFlow()).toList()
 
-        assertEquals(listOf(AsrEvent.Failure(AsrFailure.PROVIDER_ERROR)), events)
+        assertEquals(listOf(AsrEvent.Failure(AsrFailure.NO_SPEECH)), events)
         assertEquals(0, provider.utterances)
     }
 

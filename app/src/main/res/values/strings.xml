@@ -117,10 +117,12 @@
     <string name="asr_error_cancelled">Dictation cancelled.</string>
     <string name="asr_error_model_missing">The on-device model is not downloaded yet.</string>
     <string name="asr_error_missing_key">Cloud mode needs your API key. Add it in Loqui settings.</string>
+    <string name="asr_error_no_speech">No speech detected. Check the microphone and try again.</string>
 
     <!-- Phase 5: foreground-service hardening -->
     <string name="capture_error_foreground_denied">Android refused to keep the microphone service running. Open Loqui and dictate from the app.</string>
     <string name="capture_error_mic_revoked">Microphone access was revoked. Grant it again in system settings.</string>
+    <string name="capture_error_audio_stalled">The microphone stopped sending audio. Try again.</string>
 
     <!-- Phase 5: battery optimisation -->
     <string name="section_background">Background reliability</string>

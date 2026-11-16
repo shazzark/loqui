@@ -2,6 +2,7 @@ package com.loqui.android.audio
 
 import android.annotation.SuppressLint
 import com.loqui.android.asr.AudioFrame
+import com.loqui.android.audio.vad.Pcm16Signal
 import com.loqui.android.di.IoDispatcher
 import javax.inject.Inject
 import kotlinx.coroutines.CoroutineDispatcher
@@ -39,9 +40,11 @@ class AudioCaptureStream @Inject constructor(
         val source = sourceFactory.create()
         val chunk = ByteArray(READ_CHUNK_BYTES)
         val sampleRateHz = AudioFrame.SAMPLE_RATE_HZ
+        var frames = 0
 
         try {
             source.start()
+            Timber.d("Microphone opened: %d Hz mono PCM-16", sampleRateHz)
 
             while (currentCoroutineContext().isActive) {
                 val read = source.read(chunk, 0, chunk.size)
@@ -58,11 +61,23 @@ class AudioCaptureStream @Inject constructor(
 
                 while (ring.availableBytes >= FRAME_BYTES) {
                     val frame = ring.readFrame(FRAME_BYTES) ?: break
+                    frames++
+                    if (frames % LOG_EVERY_FRAMES == 0) {
+                        // Level, never audio: this is the number that explains a
+                        // session that never endpoints on a quiet or noisy device.
+                        Timber.d(
+                            "Captured %d frames (%d ms), last frame RMS %.4f",
+                            frames,
+                            frames * FRAME_MS,
+                            Pcm16Signal.rms(frame),
+                        )
+                    }
                     emit(AudioFrame(frame, sampleRateHz))
                 }
             }
         } finally {
             source.release()
+            Timber.d("Microphone released after %d frames (%d ms)", frames, frames * FRAME_MS)
         }
     }.flowOn(ioDispatcher)
 
@@ -70,10 +85,16 @@ class AudioCaptureStream @Inject constructor(
         /** 20 ms of 16 kHz mono PCM-16: 320 samples, 640 bytes. */
         const val FRAME_BYTES = AudioFrame.SAMPLE_RATE_HZ / 50 * 2
 
+        /** Duration of one [FRAME_BYTES] frame. */
+        const val FRAME_MS = 20
+
         /** Read one frame per call so endpointing latency stays at one frame. */
         const val READ_CHUNK_BYTES = FRAME_BYTES
 
         /** 30 s of audio: the hard ceiling for a single utterance. */
         const val RING_CAPACITY_BYTES = AudioFrame.SAMPLE_RATE_HZ * 2 * 30
+
+        /** One diagnostic line per second of audio. */
+        private const val LOG_EVERY_FRAMES = 1_000 / FRAME_MS
     }
 }

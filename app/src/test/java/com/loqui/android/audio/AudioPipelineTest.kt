@@ -71,7 +71,7 @@ class AudioPipelineTest {
         val events = provider.transcribe(endpointer.segment(stream.frames())).toList()
 
         assertEquals(
-            listOf<AsrEvent>(AsrEvent.Failure(AsrFailure.PROVIDER_ERROR)),
+            listOf<AsrEvent>(AsrEvent.Failure(AsrFailure.NO_SPEECH)),
             events,
         )
         assertEquals(0, provider.ingestedFrames)

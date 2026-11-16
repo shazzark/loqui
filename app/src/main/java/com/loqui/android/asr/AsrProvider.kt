@@ -43,6 +43,13 @@ enum class AsrFailure {
 
     /** Cloud mode selected and no user key is stored. Rendered as the "add your key" state. */
     MISSING_KEY,
+
+    /**
+     * Audio reached the recogniser but none of it was speech — or the endpointer closed
+     * before a single frame arrived. Distinct from [PROVIDER_ERROR] so the UI can say
+     * "no speech detected" instead of blaming the provider.
+     */
+    NO_SPEECH,
 }
 
 interface AsrProvider {

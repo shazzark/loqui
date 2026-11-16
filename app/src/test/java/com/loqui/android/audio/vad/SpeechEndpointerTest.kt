@@ -97,6 +97,48 @@ class SpeechEndpointerTest {
     }
 
     @Test
+    fun `a session with no speech closes at the no-speech timeout`() = runTest {
+        val quickTimeout = config.copy(noSpeechTimeoutMs = 100)
+        var pulled = 0
+        val microphone = flow {
+            repeat(100) {
+                pulled++
+                emit(audioFrame(QUIET_AMPLITUDE))
+            }
+        }
+
+        val emitted = endpointer(quickTimeout).segment(microphone).toList()
+
+        assertTrue("silence must not reach the recogniser", emitted.isEmpty())
+        // Five 20 ms frames: the session ends instead of listening forever.
+        assertEquals(5, pulled)
+    }
+
+    @Test
+    fun `speech inside the no-speech window keeps the session open`() = runTest {
+        val quickTimeout = config.copy(noSpeechTimeoutMs = 100, maxUtteranceMs = 2_000)
+
+        val emitted = endpointer(quickTimeout)
+            .segment((silence(2) + speech(3) + silence(10)).asFlow())
+            .toList()
+
+        // The timeout never fires once onset has confirmed: 3 onset + 5 hangover.
+        assertEquals(8, emitted.size)
+    }
+
+    @Test
+    fun `the default ceilings are fifteen seconds of speech and five without`() {
+        val defaults = VadConfig()
+
+        assertEquals(750, defaults.maxUtteranceFrames)
+        assertEquals(250, defaults.noSpeechTimeoutFrames)
+        assertTrue(
+            "the gate must sit below what a phone mic delivers at arm's length",
+            defaults.speechRmsThreshold <= 0.01f,
+        )
+    }
+
+    @Test
     fun `one endpointer instance can serve consecutive sessions`() = runTest {
         val shared = endpointer()
 
