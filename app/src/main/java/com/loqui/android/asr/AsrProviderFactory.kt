@@ -2,7 +2,7 @@ package com.loqui.android.asr
 
 import com.loqui.android.asr.cloud.CloudAsrProvider
 import com.loqui.android.asr.cloud.MockCloudAsrTransport
-import com.loqui.android.settings.AsrMode
+import com.loqui.android.di.OnDeviceAsrProvider
 import com.loqui.android.settings.SecretStore
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -19,24 +19,15 @@ interface AsrProviderFactory {
 }
 
 /**
- * Phase 3 selection: on-device stays the [FakeAsrProvider] stand-in until the
- * sherpa-onnx recognizer lands, while cloud is the real [CloudAsrProvider] wired to
- * a mock transport. This is also what makes the Phase 3 device check possible with no
- * model and no key: the stand-in consumes the real microphone audio and returns a
- * fixed sentence that can be seen landing in another app's text field.
+ * Phase 6 selection: on-device is the real sherpa-onnx recogniser, built once because
+ * loading ~43 MiB of ONNX graphs per dictation would be wasteful; cloud is the real
+ * [CloudAsrProvider] wired to a mock transport until a real endpoint ships.
  */
 @Singleton
 class DefaultAsrProviderFactory @Inject constructor(
     private val secretStore: SecretStore,
+    @OnDeviceAsrProvider private val onDeviceProvider: AsrProvider,
 ) : AsrProviderFactory {
-
-    /**
-     * A real on-device engine loads its model once and then serves every dictation, so
-     * the stand-in is reused too. Rebuilding it per session would hide that cost.
-     */
-    private val onDeviceProvider: AsrProvider by lazy {
-        FakeAsrProvider(mode = AsrMode.ON_DEVICE)
-    }
 
     override fun onDevice(): AsrProvider = onDeviceProvider
 

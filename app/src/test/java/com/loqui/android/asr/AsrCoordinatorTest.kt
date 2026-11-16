@@ -20,7 +20,10 @@ class AsrCoordinatorTest {
     private val secretStore = InMemorySecretStore()
     private val coordinator = AsrCoordinator(
         settingsRepository = settings,
-        providerFactory = DefaultAsrProviderFactory(secretStore),
+        providerFactory = DefaultAsrProviderFactory(
+            secretStore,
+            FakeAsrProvider(AsrMode.ON_DEVICE),
+        ),
     )
 
     @Test

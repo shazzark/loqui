@@ -2,6 +2,7 @@ package com.loqui.android.ui.home
 
 import com.loqui.android.capture.CaptureState
 import com.loqui.android.core.PermissionStatus
+import com.loqui.android.models.ModelDownloadState
 import com.loqui.android.models.ModelStorageReport
 import com.loqui.android.models.SpeechModel
 import com.loqui.android.models.SpeechModels
@@ -23,10 +24,15 @@ data class HomeUiState(
     val accessibilityDisclosureAccepted: Boolean = false,
     val model: SpeechModel = SpeechModels.onDeviceDefault,
     val storage: ModelStorageReport = ModelStorageReport(
-        requiredBytes = SpeechModels.onDeviceDefault.approxBytes,
+        requiredBytes = SpeechModels.onDeviceDefault.requiredBytes,
         freeBytes = 0L,
     ),
+    /** Download/install progress for [model]; the card renders every stage. */
+    val modelDownload: ModelDownloadState = ModelDownloadState.NotInstalled,
 ) {
+    val modelInstalled: Boolean
+        get() = modelDownload == ModelDownloadState.Installed
+
     /** Cloud mode is selected but the user has not supplied a key yet. */
     val needsCloudKey: Boolean
         get() = asrMode == AsrMode.CLOUD && !hasCloudKey

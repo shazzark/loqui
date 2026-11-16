@@ -4,16 +4,17 @@ Loqui is a background-first voice input app: tap the floating bubble, speak, and
 transcript lands in whatever field is focused. Recognition runs on-device by default;
 cloud providers are strictly opt-in and use **the user's own API key**.
 
-This repository is **Phase 5: hardening and distribution**. The floating bubble shows
+This repository is **Phase 6: real on-device ASR**. The floating bubble shows
 idle/listening/processing/result states, a tap starts or stops the recording service, and
 the transcript is pasted into the focused field through the accessibility service — or
 lands on the clipboard with a toast when no field is focused. An optional clean-up pass
 fixes punctuation and capitalisation, capped at **one second**; when it is off, slow,
-failing or has no key, the raw transcript is inserted. Phase 5 adds the distribution
-paperwork: a microphone service that survives Android 14/15 restrictions and a revoked
-grant, a battery-optimisation exemption, the in-app privacy policy, the Play accessibility
-disclosure, and the storage/licence scaffolding for on-device model downloads. All of it
-with **zero API keys** and no network.
+failing or has no key, the raw transcript is inserted. Phase 6 replaces the on-device
+stand-in with **sherpa-onnx** streaming Zipformer, downloaded from the official release
+into app-private storage, checksum-verified per file and unpacked only after the archive
+matches. The bubble, permissions, privacy paperwork and distribution work from Phases 3-5
+stay intact. All of it with **zero API keys**; the only network request is the model
+download the user explicitly starts.
 
 ## Build
 
@@ -31,7 +32,7 @@ Requirements:
 No keys, no `.env`, no `google-services.json`: if a build ever asks for a credential,
 that is a bug.
 
-## Architecture (Phases 3-5)
+## Architecture (Phases 3-6)
 
 | Concern | Where | Notes |
 | --- | --- | --- |
@@ -41,7 +42,7 @@ that is a bug.
 | Endpointing | `audio/vad/SpeechEndpointer` + `audio/vad/EnergyVad` | Onset (60 ms) → speech → hangover (800 ms) → utterance complete; detector is swappable for Silero |
 | Floating trigger | `trigger/BubbleService` + `BubbleController` | `specialUse` overlay service: draggable disc, tap toggles capture, never records audio or touches the network |
 | Bubble states | `trigger/BubbleAppearance` | Pure mapping `CaptureState` → accent, short label, spinner, pulse; the only `View` code lives in `BubbleController` |
-| Recognition | `asr/AsrCoordinator`, `asr/AsrProviderFactory` | `FakeAsrProvider` on-device until sherpa-onnx lands; `asr/cloud/CloudAsrProvider` for opt-in cloud, gated on the user's key |
+| Recognition | `asr/AsrCoordinator`, `asr/AsrProviderFactory` | `asr/SherpaOnnxAsrProvider` on-device (sherpa-onnx streaming Zipformer, int8); `asr/cloud/CloudAsrProvider` for opt-in cloud, gated on the user's key |
 | Clean-up (optional) | `llm/LlmCoordinator`, `llm/LlmProviderFactory` | Off by default; `OnDeviceLlmCorrector` (deterministic punctuation) or `llm/cloud/CloudLlmCorrector`, hard-capped at 1 s — any skip inserts the raw transcript |
 | Prompt | `llm/LlmPrompt` | One reviewable instruction: fix punctuation, never add/remove words, reply with the text only |
 | Insertion | `insertion/DefaultTextInserter` | Always copies to clipboard first, then attempts an accessibility paste; clipboard is the guaranteed fallback |
@@ -56,8 +57,11 @@ that is a bug.
 | Battery | `core/BatteryOptimizations` | `isIgnoringBatteryOptimizations` + `ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS` with a battery-list fallback for OEMs without the dialog |
 | Privacy policy | `privacy/PrivacyPolicy` + `ui/privacy/PrivacyPolicyScreen` | Versioned, reviewable section list rendered in-app; reachable from home and onboarding |
 | Accessibility disclosure | `privacy/DisclosurePolicy` + `ui/privacy/AccessibilityDisclosureDialog` | Play prominent disclosure before the settings deep-link, accepted once and persisted |
-| Model catalogue | `models/SpeechModels` | sherpa-onnx entry with its license; nothing bundled, no URL wired yet |
-| Model storage | `models/ModelStorage` + `models/ModelStorageProbe` | Pure archive-plus-unpacked-space decision, `formatBytes`, `StatFs` probe behind an interface |
+| Model catalogue | `models/SpeechModels` | sherpa-onnx entry with its license, archive URL, archive SHA-256 and per-file checksums/sizes; nothing bundled |
+| Model download | `models/KtorModelDownloader` | Ktor/OkHttp HTTPS GET with `Range` resume, 512 KiB progress steps, archive SHA-256 check, streaming `.tar.bz2` unpack that hashes each file while writing |
+| Model install state | `models/FileSpeechModelRepository` | App-scoped state machine `NotInstalled → Downloading → Verifying → Installing → Installed`; staging directory renamed into place only after every file verifies |
+| Model storage | `models/AppModelStorage` + `models/ModelStorageProbe` | App-private `filesDir/models`; pure archive-plus-unpacked-space decision, `formatBytes`, `StatFs` probe behind an interface |
+| On-device engine | `asr/StreamingAsrEngine` + `asr/SherpaOnnxStreamingEngine` | One recogniser for the app's lifetime (rebuilt only when paths/sample rate change), a fresh `OnlineStream` per dictation; endpointing stays Loqui's job |
 
 Design rules that later phases must not break:
 
@@ -94,7 +98,11 @@ Design rules that later phases must not break:
     of them.
 11. **No download without a license and a space check.** `SpeechModels` records the license
     with the model, `ModelStorageReport` refuses a download that would not still fit its
-    unpacked copy, and the UI ships the button disabled until the engine exists.
+    unpacked copy, and the card shows every install stage instead of a blind spinner.
+12. **Nothing unverified reaches the recogniser.** The archive is checked against the
+    catalogue SHA-256, then each unpacked file is hashed and size-checked while it is
+    written into a staging directory. Only a fully verified directory is renamed into
+    place, so `SpeechModelRepository.paths()` never points at a partial model.
 
 ## Tests
 
@@ -193,8 +201,9 @@ without a device:
 - `ModelStorageTest` — exact-fit is room, one byte short is not, an unreadable free space
   reports the whole download as missing, the default margin covers the unpacked copy, and
   sizes format as `B`/`KB`/`MB`/`GB`
-- `SpeechModelsTest` — catalogue ids are unique, the default model is listed, and every
-  entry has a plausible size and a license that allows commercial use
+- `SpeechModelsTest` — catalogue ids are unique, the default model is listed and
+  downloadable, its checksums are 64-character hex, `requiredBytes` covers archive plus
+  unpacked files, and every entry has a plausible size and a commercial-use license
 - `PrivacyPolicyTest` — every required topic (audio, on-device default, cloud opt-in,
   clean-up, logging, keys, accessibility) is present, no section repeats, the policy is
   versioned
@@ -220,25 +229,60 @@ On a real device, with the bubble running:
    accessibility row → the disclosure dialog appears first; *I understand* opens the system
    accessibility page, *Not now* leaves the clipboard path intact. After accepting once,
    the dialog no longer appears.
-6. **Model scaffold.** *On-device model* shows the sherpa-onnx Zipformer entry, "About
-   120 MB · Apache 2.0 license", the free-space line and a disabled *Download model*
-   button. Filling the disk is not necessary: check that a device with < 184 MB free shows
-   the shortfall line instead of the "enough" line.
+6. **Model card.** *On-device model* shows the sherpa-onnx Zipformer entry, "About 122 MB
+   download · Apache 2.0 license · 42 MB on disk", the free-space line and an enabled
+   *Download model* button. A device with less free space than the archive plus its
+   unpacked copy shows the shortfall line and the download fails before any request.
 
-Until these are recorded here, the Phase 5 boxes in `04-phases.md` stay unticked.
+## Tests: model download and on-device ASR (Phase 6)
 
-## Deliberate Phase 3-5 gaps
+`app/src/test/.../models/` and `.../asr/` cover the install pipeline and the recogniser
+with fakes, so no device or native library is needed:
 
-- On-device recognition is still `FakeAsrProvider`; the sherpa-onnx engine lands with
-  the model download work. The bubble, permissions, insertion and clipboard paths it
-  feeds are real.
+- `SpeechModelRepositoryTest` — a completed install verifies, unpacks and moves into place;
+  a partial archive resumes; a network failure keeps the part file; a checksum mismatch and
+  a cancel delete it; progress never exceeds the archive size; an installed model is not
+  downloaded again; too little free space fails before any request
+- `ModelDownloaderHashTest` — `sha256Hex` matches the known digest of the fixture bytes and
+  `toHex` pads values below `0x10`
+- `SherpaOnnxAsrProviderTest` — a missing model reports `MODEL_UNAVAILABLE` without opening
+  the engine; frames become de-duplicated partials plus one trimmed final; empty audio
+  fails instead of inventing text; an engine that throws surfaces `PROVIDER_ERROR` and
+  still releases the session
+- `Pcm16Test` — little-endian PCM-16 converts to floats in `[-1, 1]`, and an odd trailing
+  byte is dropped rather than read past the end of the frame
+- `AsrProviderFactoryTest` — on-device returns the injected app-scoped provider, cloud is
+  rebuilt per session
+
+## Device check (Phase 6 exit criterion)
+
+On a device with the debug build:
+
+1. **Install.** Home → *On-device model* → *Download model*: the card shows a percentage
+   plus byte counts. Leave Home and return — the transfer keeps running, because it lives
+   in the application scope rather than the ViewModel.
+2. **Cancel and retry.** Cancel mid-download → the card returns to *Not installed* and the
+   partial archive is removed. Start again, then enable airplane mode mid-transfer → the
+   network failure is explained; disable airplane mode and tap *Retry* → progress resumes
+   from the bytes already on disk instead of restarting at 0.
+3. **Verify and unpack.** Completion passes through *Verifying* and *Unpacking* to
+   *Installed* with the on-disk size. With `adb shell run-as <debug package>`, confirm
+   `files/models/<id>/` holds `tokens.txt`, `encoder.onnx`, `decoder.onnx` and `joiner.onnx`
+   and that no `.part` or `.staging` entry is left behind.
+4. **Dictate offline.** Airplane mode on; dictate "this is a loqui test transcript" → the
+   recognised sentence is inserted, on-device mode asks for no key, and no request is made.
+   Switching to cloud stays gated on the user's key.
+
+**Not yet recorded on a physical device.** Until this section is filled in, treat the
+Phase 6 on-device path as unit-tested but not device-verified.
+
+## Deliberate Phase 3-6 gaps
+
 - The cloud provider is complete except its transport: `MockCloudAsrTransport` returns
   a canned transcript, so the Deepgram/AssemblyAI client can be dropped in behind
   `CloudAsrTransport` without touching the provider.
 - VAD is an energy detector. It proves the pipeline deterministically; Silero ONNX
   replaces it behind `VoiceActivityDetector` when models ship.
-- No `android.permission.INTERNET` in the manifest yet: nothing makes a request, and the
-  permission should land with the cloud client that actually uses it.
 - Bubble position is not persisted across service restarts, and there is no Compose UI
   test harness yet (no Robolectric), so the screen logic is covered through the pure
   state mappers instead.
@@ -248,10 +292,14 @@ Until these are recorded here, the Phase 5 boxes in `04-phases.md` stay unticked
 - Cloud clean-up is complete except its transport: `MockCloudLlmTransport` performs no
   network I/O, so an OpenAI/DeepSeek client drops in behind `LlmTransport` without
   touching the coordinator, the prompt or the 1 s budget.
-- The model section is a scaffold: `SpeechModels` records the license and the size but no
-  URL, no checksum and no downloader, and the *Download model* button is disabled. The
-  sherpa-onnx engine and the download service land together, behind the existing
-  `ModelStorageProbe`/`SpeechModel` types.
+- The model catalogue has one English streaming Zipformer. A second language is a new
+  `SpeechModel` entry with measured archive and per-file checksums — no code change.
+- The vendored sherpa-onnx AAR is committed under `app/libs` (49 MB) and the APK ships
+  `arm64-v8a` and `x86_64` only; 32-bit devices are deliberately unsupported.
+- A reinstall does not rebuild an already-loaded recogniser: `SherpaOnnxStreamingEngine`
+  caches by model directory, so replacing the model takes effect after a process restart.
+- The free-space line on the model card is refreshed when Home resumes, not live during or
+  after an install.
 - The privacy policy is in-app only. Play requires a hosted URL as well, so the listing
   copy has to be generated from `PrivacyPolicy.sections` before release; `PrivacyPolicy.VERSION`
   is the trigger for regenerating it.
@@ -261,8 +309,6 @@ Until these are recorded here, the Phase 5 boxes in `04-phases.md` stay unticked
 - Battery profiling numbers (mA/doze behaviour on real hardware) and OEM QA on Samsung,
   Xiaomi and Pixel are unmeasured; `BatteryOptimizations` only makes the exemption
   reachable.
-- No `android.permission.INTERNET` in the manifest yet: nothing makes a request, and the
-  permission should land with the cloud client that actually uses it.
 - `REQUEST_IGNORE_BATTERY_OPTIMIZATIONS` is a Play-policy-sensitive permission. The
   in-app request is deliberate for a background voice service, and the battery-list
   fallback plus the "optional" copy is what keeps it defensible; revisit if review objects.

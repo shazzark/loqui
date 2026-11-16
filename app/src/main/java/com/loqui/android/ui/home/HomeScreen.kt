@@ -15,6 +15,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
@@ -39,10 +40,13 @@ import androidx.compose.ui.unit.dp
 import com.loqui.android.BuildConfig
 import com.loqui.android.R
 import com.loqui.android.capture.CaptureState
+import com.loqui.android.models.ModelDownloadFailure
+import com.loqui.android.models.ModelDownloadState
 import com.loqui.android.models.formatBytes
 import com.loqui.android.settings.AsrMode
 import com.loqui.android.settings.LlmMode
 import com.loqui.android.ui.privacy.AccessibilityDisclosureDialog
+import kotlin.math.roundToInt
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -65,6 +69,8 @@ fun HomeScreen(
     onRequestBatteryExemption: () -> Boolean,
     onOpenBatterySettings: () -> Unit,
     onOpenPrivacyPolicy: () -> Unit,
+    onDownloadModel: () -> Unit,
+    onCancelModelDownload: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Scaffold(
@@ -115,7 +121,11 @@ fun HomeScreen(
                 onRequestExemption = onRequestBatteryExemption,
                 onOpenBatterySettings = onOpenBatterySettings,
             )
-            ModelDownloadsSection(uiState = uiState)
+            ModelDownloadsSection(
+                uiState = uiState,
+                onDownloadModel = onDownloadModel,
+                onCancelModelDownload = onCancelModelDownload,
+            )
             AboutSection(onOpenPrivacyPolicy = onOpenPrivacyPolicy)
             Spacer(Modifier.height(32.dp))
         }
@@ -153,6 +163,14 @@ private fun StatusSection(
         if (uiState.captureState == CaptureState.NeedsKey) {
             Text(
                 text = stringResource(R.string.cloud_key_missing_body),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 6.dp),
+            )
+        }
+        if (uiState.asrMode == AsrMode.ON_DEVICE && !uiState.modelInstalled) {
+            Text(
+                text = stringResource(R.string.model_missing_body),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(top = 6.dp),
@@ -502,12 +520,16 @@ private fun BatterySection(
 }
 
 /**
- * Scaffold for on-device model downloads: the catalogue entry, its license and the free
- * space check are real; the button stays disabled until the sherpa-onnx engine and the
- * downloader exist, so the screen never promises a download that cannot happen.
+ * The on-device model card. Every install stage is visible instead of a spinner that
+ * hides a 122 MiB transfer: progress and cancel while downloading, a stage label while
+ * verifying/unpacking, and an actionable reason when a stage fails.
  */
 @Composable
-private fun ModelDownloadsSection(uiState: HomeUiState) {
+private fun ModelDownloadsSection(
+    uiState: HomeUiState,
+    onDownloadModel: () -> Unit,
+    onCancelModelDownload: () -> Unit,
+) {
     Section(stringResource(R.string.section_models)) {
         Panel {
             Text(text = uiState.model.displayName, style = MaterialTheme.typography.titleSmall)
@@ -517,26 +539,34 @@ private fun ModelDownloadsSection(uiState: HomeUiState) {
                     R.string.model_meta,
                     formatBytes(uiState.model.approxBytes),
                     uiState.model.license.displayName,
+                    formatBytes(uiState.model.installedBytes),
                 ),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             Spacer(Modifier.height(8.dp))
-            Text(
-                text = storageSummary(uiState),
-                style = MaterialTheme.typography.bodySmall,
-                color = if (uiState.storage.hasRoom) {
-                    MaterialTheme.colorScheme.onSurfaceVariant
-                } else {
-                    MaterialTheme.colorScheme.error
-                },
-            )
-            Spacer(Modifier.height(8.dp))
-            Button(onClick = {}, enabled = false) {
-                Text(stringResource(R.string.model_download_action))
+
+            when (val state = uiState.modelDownload) {
+                ModelDownloadState.Installed -> InstalledModelBody(uiState)
+                is ModelDownloadState.Downloading -> DownloadingModelBody(
+                    state = state,
+                    onCancel = onCancelModelDownload,
+                )
+                ModelDownloadState.Verifying -> WorkingModelBody(R.string.model_verifying)
+                ModelDownloadState.Installing -> WorkingModelBody(R.string.model_installing)
+                is ModelDownloadState.Failed -> FailedModelBody(
+                    uiState = uiState,
+                    failure = state.failure,
+                    onDownload = onDownloadModel,
+                )
+                ModelDownloadState.NotInstalled -> NotInstalledModelBody(
+                    uiState = uiState,
+                    onDownload = onDownloadModel,
+                )
             }
+
             Text(
-                text = stringResource(R.string.model_placeholder_note),
+                text = stringResource(R.string.model_source_note),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(top = 8.dp),
@@ -549,6 +579,109 @@ private fun ModelDownloadsSection(uiState: HomeUiState) {
             )
         }
     }
+}
+
+@Composable
+private fun InstalledModelBody(uiState: HomeUiState) {
+    Text(
+        text = stringResource(R.string.model_installed_title),
+        style = MaterialTheme.typography.bodyLarge,
+    )
+    Text(
+        text = stringResource(
+            R.string.model_installed_body,
+            formatBytes(uiState.model.installedBytes),
+        ),
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.padding(top = 2.dp),
+    )
+}
+
+@Composable
+private fun DownloadingModelBody(
+    state: ModelDownloadState.Downloading,
+    onCancel: () -> Unit,
+) {
+    Text(
+        text = stringResource(
+            R.string.model_downloading,
+            (state.fraction * 100).roundToInt(),
+            formatBytes(state.bytesReceived),
+            formatBytes(state.totalBytes),
+        ),
+        style = MaterialTheme.typography.bodyMedium,
+    )
+    LinearProgressIndicator(
+        progress = { state.fraction },
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 8.dp),
+    )
+    TextButton(onClick = onCancel, modifier = Modifier.padding(top = 4.dp)) {
+        Text(stringResource(R.string.model_cancel_action))
+    }
+}
+
+@Composable
+private fun WorkingModelBody(@StringRes label: Int) {
+    Text(text = stringResource(label), style = MaterialTheme.typography.bodyMedium)
+    LinearProgressIndicator(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 8.dp),
+    )
+}
+
+@Composable
+private fun NotInstalledModelBody(uiState: HomeUiState, onDownload: () -> Unit) {
+    Text(
+        text = storageSummary(uiState),
+        style = MaterialTheme.typography.bodySmall,
+        color = if (uiState.storage.hasRoom) {
+            MaterialTheme.colorScheme.onSurfaceVariant
+        } else {
+            MaterialTheme.colorScheme.error
+        },
+    )
+    Spacer(Modifier.height(8.dp))
+    Button(onClick = onDownload, enabled = uiState.model.isDownloadable && uiState.storage.hasRoom) {
+        Text(stringResource(R.string.model_download_action))
+    }
+}
+
+@Composable
+private fun FailedModelBody(
+    uiState: HomeUiState,
+    failure: ModelDownloadFailure,
+    onDownload: () -> Unit,
+) {
+    Text(
+        text = modelFailureText(failure),
+        style = MaterialTheme.typography.bodyMedium,
+        color = MaterialTheme.colorScheme.error,
+    )
+    Text(
+        text = storageSummary(uiState),
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.padding(top = 6.dp),
+    )
+    if (failure != ModelDownloadFailure.UNSUPPORTED) {
+        Spacer(Modifier.height(8.dp))
+        Button(onClick = onDownload, enabled = uiState.storage.hasRoom) {
+            Text(stringResource(R.string.model_retry_action))
+        }
+    }
+}
+
+@Composable
+private fun modelFailureText(failure: ModelDownloadFailure): String = when (failure) {
+    ModelDownloadFailure.NETWORK -> stringResource(R.string.model_failure_network)
+    ModelDownloadFailure.CHECKSUM_MISMATCH -> stringResource(R.string.model_failure_checksum)
+    ModelDownloadFailure.NO_SPACE -> stringResource(R.string.model_failure_space)
+    ModelDownloadFailure.STORAGE -> stringResource(R.string.model_failure_storage)
+    ModelDownloadFailure.UNSUPPORTED -> stringResource(R.string.model_failure_unsupported)
 }
 
 @Composable

@@ -15,6 +15,7 @@ import com.loqui.android.core.Permissions
 import com.loqui.android.hardening.captureStartFailureMessage
 import com.loqui.android.models.ModelStorageProbe
 import com.loqui.android.models.ModelStorageReport
+import com.loqui.android.models.SpeechModelRepository
 import com.loqui.android.models.SpeechModels
 import com.loqui.android.settings.AsrMode
 import com.loqui.android.settings.LlmMode
@@ -41,6 +42,7 @@ class HomeViewModel @Inject constructor(
     private val captureStateHolder: CaptureStateHolder,
     private val captureFeedback: CaptureFeedback,
     private val modelStorageProbe: ModelStorageProbe,
+    private val modelRepository: SpeechModelRepository,
 ) : ViewModel() {
 
     private val permissionState = MutableStateFlow(Permissions.status(context))
@@ -69,7 +71,8 @@ class HomeViewModel @Inject constructor(
         deviceState,
         bubbleRunning,
         captureStateHolder.state,
-    ) { settings, device, bubble, captureState ->
+        modelRepository.downloadState,
+    ) { settings, device, bubble, captureState, download ->
         HomeUiState(
             asrMode = settings.asrMode,
             llmEnabled = settings.llmEnabled,
@@ -83,6 +86,7 @@ class HomeViewModel @Inject constructor(
             accessibilityDisclosureAccepted = settings.accessibilityDisclosureAccepted,
             model = SpeechModels.onDeviceDefault,
             storage = device.storage,
+            modelDownload = download,
         )
     }.stateIn(
         scope = viewModelScope,
@@ -93,6 +97,7 @@ class HomeViewModel @Inject constructor(
             hasLlmKey = storedKeys.value.llm,
             batteryExempt = batteryState.value,
             storage = storageReport.value,
+            modelDownload = modelRepository.downloadState.value,
         ),
     )
 
@@ -226,6 +231,15 @@ class HomeViewModel @Inject constructor(
         VoiceInputService.cancel(context)
     }
 
+    /** Starts or resumes the 122 MiB install; the repository owns the transfer. */
+    fun downloadModel() {
+        modelRepository.download(SpeechModels.onDeviceDefault)
+    }
+
+    fun cancelModelDownload() {
+        modelRepository.cancelDownload()
+    }
+
     fun openOverlaySettings() = Permissions.openOverlaySettings(context)
 
     fun openAccessibilitySettings() = Permissions.openAccessibilitySettings(context)
@@ -236,7 +250,7 @@ class HomeViewModel @Inject constructor(
 
     /** Free space on the volume a model download would be extracted into. */
     private fun currentStorageReport(): ModelStorageReport = ModelStorageReport(
-        requiredBytes = SpeechModels.onDeviceDefault.approxBytes,
+        requiredBytes = SpeechModels.onDeviceDefault.requiredBytes,
         freeBytes = modelStorageProbe.freeBytes(),
     )
 

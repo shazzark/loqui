@@ -90,6 +90,8 @@ fun LoquiApp() {
             onRequestBatteryExemption = viewModel::requestBatteryExemption,
             onOpenBatterySettings = viewModel::openBatterySettings,
             onOpenPrivacyPolicy = openPrivacyPolicy,
+            onDownloadModel = viewModel::downloadModel,
+            onCancelModelDownload = viewModel::cancelModelDownload,
         )
     }
 }

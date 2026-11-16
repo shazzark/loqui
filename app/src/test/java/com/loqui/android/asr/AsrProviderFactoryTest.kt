@@ -9,14 +9,14 @@ import org.junit.Test
 
 class AsrProviderFactoryTest {
 
-    private val factory = DefaultAsrProviderFactory(InMemorySecretStore())
+    private val onDevice = FakeAsrProvider(AsrMode.ON_DEVICE)
+    private val factory = DefaultAsrProviderFactory(InMemorySecretStore(), onDevice)
 
     @Test
-    fun `the on-device provider is created once and reused across dictations`() {
-        val first = factory.onDevice()
-
-        assertSame(first, factory.onDevice())
-        assertEquals(AsrMode.ON_DEVICE, first.mode)
+    fun `the app-scoped on-device provider is returned for every dictation`() {
+        assertSame(onDevice, factory.onDevice())
+        assertSame(onDevice, factory.onDevice())
+        assertEquals(AsrMode.ON_DEVICE, factory.onDevice().mode)
     }
 
     @Test

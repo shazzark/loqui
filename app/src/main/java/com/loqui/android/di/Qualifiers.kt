@@ -14,3 +14,8 @@ annotation class DefaultDispatcher
 @Retention(AnnotationRetention.RUNTIME)
 @Qualifier
 annotation class ApplicationScope
+
+/** The on-device recogniser, as opposed to the cloud provider built per session. */
+@Retention(AnnotationRetention.RUNTIME)
+@Qualifier
+annotation class OnDeviceAsrProvider

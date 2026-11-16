@@ -14,7 +14,13 @@ android {
         minSdk = 26
         targetSdk = 37
         versionCode = 1
-        versionName = "0.1.0-phase5"
+        versionName = "0.1.0-phase6"
+
+        // sherpa-onnx ships four ABIs. Phones are arm64 and emulators x86_64; shipping
+        // the two 32-bit sets as well would double the APK for no supported target.
+        ndk {
+            abiFilters += listOf("arm64-v8a", "x86_64")
+        }
     }
 
     buildFeatures {
@@ -62,7 +68,14 @@ dependencies {
     ksp(libs.hilt.compiler)
 
     implementation(libs.kotlinx.coroutines.android)
+    implementation(libs.ktor.client.core)
+    implementation(libs.ktor.client.okhttp)
+    implementation(libs.commons.compress)
     implementation(libs.timber)
+
+    // Official sherpa-onnx Android release (v2.0.1), vendored because the project is not
+    // published to Maven Central. It carries the Kotlin API and the jniLibs for each ABI.
+    implementation(files("libs/sherpa-onnx-2.0.1.aar"))
 
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)
