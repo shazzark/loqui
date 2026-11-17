@@ -47,7 +47,7 @@ class SherpaOnnxAsrProvider @Inject constructor(
     private val sessionLock = Mutex()
 
     override fun availability(): AsrAvailability =
-        if (models.paths() != null) AsrAvailability.Ready else AsrAvailability.ModelMissing
+        if (models.activePaths() != null) AsrAvailability.Ready else AsrAvailability.ModelMissing
 
     /**
      * Loads the recogniser before the first dictation needs it.
@@ -63,7 +63,7 @@ class SherpaOnnxAsrProvider @Inject constructor(
      * problem with the session's own context.
      */
     suspend fun warmUp() {
-        val paths = models.paths() ?: return
+        val paths = models.activePaths() ?: return
 
         withContext(ioDispatcher) {
             sessionLock.withLock {
@@ -96,8 +96,23 @@ class SherpaOnnxAsrProvider @Inject constructor(
         }
     }
 
+    /**
+     * Frees the recogniser when nothing can use it.
+     *
+     * `RecogniserWarmUp` calls this when the user leaves on-device mode or switches to the
+     * other model: the graphs are tens of megabytes of int8 weights that stay resident for
+     * the life of the process otherwise, on a device where the next app launch will be
+     * fighting for the same RAM. The lock keeps a release from tearing a session out from
+     * under an in-flight dictation; a dictation that starts afterwards simply reloads.
+     */
+    suspend fun release() {
+        withContext(ioDispatcher) {
+            sessionLock.withLock { engine.release() }
+        }
+    }
+
     override fun transcribe(audio: Flow<AudioFrame>): Flow<AsrEvent> = flow {
-        val paths = models.paths()
+        val paths = models.activePaths()
         if (paths == null) {
             emit(AsrEvent.Failure(AsrFailure.MODEL_UNAVAILABLE))
             return@flow
@@ -295,7 +310,13 @@ class SherpaOnnxAsrProvider @Inject constructor(
         if (!file.isFile) return "MISSING"
 
         val bytes = file.length()
-        val expected = SpeechModels.onDeviceDefault.file(file.name)?.sizeBytes
+        // The file's own directory identifies the model: `encoder.onnx` is a different size
+        // in each catalogue entry, so matching on the file name alone would report a healthy
+        // 20M encoder as a truncated accurate one.
+        val expected = SpeechModels.all
+            .firstOrNull { it.id == file.parentFile?.name }
+            ?.file(file.name)
+            ?.sizeBytes
         if (expected != null && bytes != expected) {
             return "$bytes B, expected $expected B"
         }

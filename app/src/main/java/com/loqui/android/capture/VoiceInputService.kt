@@ -158,7 +158,7 @@ class VoiceInputService : Service() {
             val stallWatch = launch { watchForStalledAudio() }
             try {
                 // Mic -> ring buffer -> VAD. The endpointer completes the flow at the
-                // utterance endpoint (silence, 15 s ceiling, or 8 s without speech),
+                // utterance endpoint (silence, 10 s ceiling, or 8 s without speech),
                 // which stops capture and releases the mic.
                 val utterance = speechEndpointer.segment(audioCaptureStream.frames())
                 Timber.d("Utterance flow ready; handing it to the ASR provider")
@@ -190,7 +190,7 @@ class VoiceInputService : Service() {
      * Last-resort guard for a session that never reaches an endpoint.
      *
      * A healthy session leaves [CaptureState.Listening] within the endpointer's own
-     * ceilings (15 s of speech, 8 s of silence), so still listening after
+     * ceilings (10 s of speech, 8 s of silence), so still listening after
      * [SESSION_WATCHDOG_MS] means the microphone stopped delivering frames. Cancelling
      * the job releases the microphone and takes the bubble out of "Listening"; the
      * frame ceilings in [SpeechEndpointer] are what guarantee the captured audio still
@@ -483,8 +483,9 @@ class VoiceInputService : Service() {
         private const val PERMISSION_POLL_MS = 500L
 
         /**
-         * Wall-clock backstop for a session that never endpoints. Twice the endpointer's
-         * 15 s ceiling, so a slow device that is still processing is not cut off.
+         * Wall-clock backstop for a session that never endpoints. Three times the
+         * endpointer's 10 s ceiling, so a slow device that is still processing is not cut
+         * off.
          */
         private const val SESSION_WATCHDOG_MS = 30_000L
 

@@ -173,6 +173,15 @@
 
     <!-- Phase 6: on-device model downloads -->
     <string name="section_models">On-device model</string>
+    <string name="model_quality_title">Model quality</string>
+    <string name="model_quality_body">Automatic matches the model to this device\'s memory. Pick one yourself if you prefer speed or accuracy.</string>
+    <string name="model_quality_auto">Automatic</string>
+    <string name="model_quality_auto_description">Picks fast or accurate from this device\'s installed memory.</string>
+    <string name="model_quality_fast">Fast</string>
+    <string name="model_quality_fast_description">Smaller model. Keeps up on phones with 4 GB of memory.</string>
+    <string name="model_quality_accurate">Accurate</string>
+    <string name="model_quality_accurate_description">Larger model with better transcripts. Needs 6 GB of memory to keep up.</string>
+    <string name="model_quality_auto_resolved">This device will run the %1$s model.</string>
     <string name="model_meta">About %1$s download · %2$s license · %3$s on disk</string>
     <string name="model_space_enough">%1$s free — enough for the download and its unpacked copy.</string>
     <string name="model_space_short">%1$s free — %2$s short of the %3$s needed.</string>

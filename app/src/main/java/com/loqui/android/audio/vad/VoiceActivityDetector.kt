@@ -27,7 +27,7 @@ interface VoiceActivityDetector {
  * [VadConfig.maxSpeechRmsThreshold]. No frame is reported as speech until the window
  * closes: before the room is measured the only gate available is
  * [VadConfig.minSpeechRmsThreshold], and room tone in a café sits above it — which is
- * exactly the false onset that used to run an utterance to its 15 s ceiling. The cost is
+ * exactly the false onset that used to run an utterance to its 10 s ceiling. The cost is
  * that speech beginning in the first three tenths of a second of a session is not part of
  * the utterance; the bubble needs those 300 ms to appear anyway.
  *
@@ -35,6 +35,15 @@ interface VoiceActivityDetector {
  * start of the sentence. Four of the 15 frames (80 ms of quiet after the tap) are enough
  * to measure the room, while a burst of speech — or one zero-filled buffer from
  * `AudioRecord` settling — cannot move the estimate on its own.
+ *
+ * The absolute gate is only half of the decision. A gate sits where the room is, and a
+ * talker who leans back or trails off mid-sentence lands in the band between the room and
+ * the gate: every frame is still louder than the café, so the gate calls it speech, the
+ * utterance never falls silent, and it drags on to [VadConfig.maxUtteranceMs] with the
+ * recogniser producing nothing new. So a frame must also be within
+ * [VadConfig.relativeSilenceFactor] of the loudest frame of the current utterance to count
+ * as speech. The peak makes the test relative to *this* voice at *this* distance instead of
+ * to the room, which is the only reference that stays correct as a user moves.
  *
  * Deliberately dependency-free and deterministic; the accuracy-critical Silero model
  * slots in behind [VoiceActivityDetector] when the on-device runtime lands.
@@ -55,6 +64,16 @@ class EnergyVad(
     var speechRmsThreshold: Float = config.minSpeechRmsThreshold
         private set
 
+    /**
+     * Loudest frame accepted as speech since [reset]. Zero before the first one.
+     *
+     * Kept for the whole utterance rather than over a sliding window: a window would let
+     * the reference sink during a pause and start calling room tone speech again, which is
+     * the failure this exists to stop.
+     */
+    var peakSpeechRms: Float = 0f
+        private set
+
     /** True once [config]'s window has been measured in this session. */
     val isCalibrated: Boolean
         get() = calibratedFrames >= calibrationWindow.size
@@ -63,6 +82,7 @@ class EnergyVad(
         calibratedFrames = 0
         noiseFloorRms = FALLBACK_NOISE_FLOOR
         speechRmsThreshold = config.minSpeechRmsThreshold
+        peakSpeechRms = 0f
     }
 
     override fun isSpeech(frame: AudioFrame): Boolean {
@@ -73,7 +93,15 @@ class EnergyVad(
             // every earlier one is unmeasurable by definition.
             if (!isCalibrated) return false
         }
-        return rms >= speechRmsThreshold
+        if (rms < speechRmsThreshold) return false
+
+        // The relative half of the decision: far quieter than the loudest part of what is
+        // already being transcribed is a pause, even when the room gate would accept it.
+        if (peakSpeechRms > 0f && rms < peakSpeechRms * config.relativeSilenceFactor) {
+            return false
+        }
+        if (rms > peakSpeechRms) peakSpeechRms = rms
+        return true
     }
 
     /**

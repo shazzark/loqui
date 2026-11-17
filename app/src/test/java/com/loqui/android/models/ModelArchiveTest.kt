@@ -160,6 +160,7 @@ class ModelArchiveTest {
     private fun model(files: List<ModelFile>) = SpeechModel(
         id = "test-zipformer",
         displayName = "Test Zipformer",
+        modelType = SpeechModels.ZIPFORMER2,
         approxBytes = 1_000,
         license = ModelLicense.APACHE_2_0,
         files = files,

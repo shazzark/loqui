@@ -27,10 +27,34 @@ enum class LlmMode(val storageValue: String) {
     }
 }
 
+/**
+ * `asr.model.quality`. What the user asked the on-device recogniser to optimise for.
+ *
+ * [AUTO] is the default and the only value that looks at the phone: it picks the accurate
+ * export on high-memory devices and the 20M export on the rest. The other two exist
+ * because the automatic call is a guess about someone else's phone — a user who prefers
+ * more accurate text on a small phone, or faster text on a big one, should be able to say
+ * so without a hidden developer flag.
+ */
+enum class ModelQuality(val storageValue: String) {
+    AUTO("auto"),
+    FAST("fast"),
+    ACCURATE("accurate"),
+    ;
+
+    companion object {
+        fun fromStorage(value: String?): ModelQuality =
+            entries.firstOrNull { it.storageValue == value } ?: AUTO
+    }
+}
+
 data class LoquiSettings(
     val asrMode: AsrMode = AsrMode.ON_DEVICE,
     val llmEnabled: Boolean = false,
     val llmMode: LlmMode = LlmMode.ON_DEVICE,
+    /** Which on-device model to run; [ModelQuality.AUTO] defers to the device's RAM. */
+    val modelQuality: ModelQuality = ModelQuality.AUTO,
+
     /**
      * The Play accessibility disclosure was accepted.
      *

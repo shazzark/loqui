@@ -45,6 +45,7 @@ import com.loqui.android.models.ModelDownloadState
 import com.loqui.android.models.formatBytes
 import com.loqui.android.settings.AsrMode
 import com.loqui.android.settings.LlmMode
+import com.loqui.android.settings.ModelQuality
 import com.loqui.android.ui.privacy.AccessibilityDisclosureDialog
 import kotlin.math.roundToInt
 
@@ -53,6 +54,7 @@ import kotlin.math.roundToInt
 fun HomeScreen(
     uiState: HomeUiState,
     onSelectAsrMode: (AsrMode) -> Unit,
+    onSelectModelQuality: (ModelQuality) -> Unit,
     onSaveCloudKey: (String) -> Boolean,
     onRemoveCloudKey: () -> Unit,
     onSaveLlmKey: (String) -> Boolean,
@@ -123,6 +125,7 @@ fun HomeScreen(
             )
             ModelDownloadsSection(
                 uiState = uiState,
+                onSelectModelQuality = onSelectModelQuality,
                 onDownloadModel = onDownloadModel,
                 onCancelModelDownload = onCancelModelDownload,
             )
@@ -520,17 +523,56 @@ private fun BatterySection(
 }
 
 /**
- * The on-device model card. Every install stage is visible instead of a spinner that
- * hides a 122 MiB transfer: progress and cancel while downloading, a stage label while
- * verifying/unpacking, and an actionable reason when a stage fails.
+ * The on-device model card: which model this device runs, then every install stage.
+ *
+ * The quality choice comes first because it decides what the rest of the card describes —
+ * switching it re-routes the model, so the name, sizes and install state below all change
+ * with it. Installs are not hidden behind a spinner: progress and cancel while downloading,
+ * a stage label while verifying/unpacking, and an actionable reason when a stage fails.
  */
 @Composable
 private fun ModelDownloadsSection(
     uiState: HomeUiState,
+    onSelectModelQuality: (ModelQuality) -> Unit,
     onDownloadModel: () -> Unit,
     onCancelModelDownload: () -> Unit,
 ) {
     Section(stringResource(R.string.section_models)) {
+        Panel {
+            Text(
+                text = stringResource(R.string.model_quality_title),
+                style = MaterialTheme.typography.titleSmall,
+            )
+            Text(
+                text = stringResource(R.string.model_quality_body),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 2.dp),
+            )
+            Spacer(Modifier.height(8.dp))
+            ModelQuality.entries.forEach { quality ->
+                SelectableRow(
+                    title = stringResource(quality.titleRes()),
+                    description = stringResource(quality.descriptionRes()),
+                    selected = uiState.modelQuality == quality,
+                    onClick = { onSelectModelQuality(quality) },
+                )
+            }
+            if (uiState.modelQuality == ModelQuality.AUTO) {
+                Text(
+                    text = stringResource(
+                        R.string.model_quality_auto_resolved,
+                        uiState.model.displayName,
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 4.dp),
+                )
+            }
+        }
+
+        Spacer(Modifier.height(8.dp))
+
         Panel {
             Text(text = uiState.model.displayName, style = MaterialTheme.typography.titleSmall)
             Spacer(Modifier.height(4.dp))
@@ -700,6 +742,25 @@ private fun storageSummary(uiState: HomeUiState): String {
             formatBytes(storage.neededBytes),
         )
     }
+}
+
+/**
+ * Labels for the quality selector. Kept next to the card rather than on [ModelQuality]
+ * because they are presentation, and the enum is persisted by value and unit-tested
+ * without Android resources on the classpath.
+ */
+@StringRes
+private fun ModelQuality.titleRes(): Int = when (this) {
+    ModelQuality.AUTO -> R.string.model_quality_auto
+    ModelQuality.FAST -> R.string.model_quality_fast
+    ModelQuality.ACCURATE -> R.string.model_quality_accurate
+}
+
+@StringRes
+private fun ModelQuality.descriptionRes(): Int = when (this) {
+    ModelQuality.AUTO -> R.string.model_quality_auto_description
+    ModelQuality.FAST -> R.string.model_quality_fast_description
+    ModelQuality.ACCURATE -> R.string.model_quality_accurate_description
 }
 
 @Composable

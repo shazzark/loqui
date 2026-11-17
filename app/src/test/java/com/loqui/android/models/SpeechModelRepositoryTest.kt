@@ -1,7 +1,13 @@
 package com.loqui.android.models
 
+import com.loqui.android.settings.LoquiSettings
+import com.loqui.android.settings.ModelQuality
+import com.loqui.android.testing.FakeDeviceCapabilities
+import com.loqui.android.testing.FakeSettingsRepository
 import java.io.File
+import java.io.RandomAccessFile
 import java.nio.file.Files
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.test.TestScope
@@ -25,6 +31,7 @@ class SpeechModelRepositoryTest {
     private val model = SpeechModel(
         id = "test-model",
         displayName = "Test model",
+        modelType = SpeechModels.ZIPFORMER2,
         approxBytes = 8,
         license = ModelLicense.MIT,
         checksum = "abc",
@@ -110,19 +117,20 @@ class SpeechModelRepositoryTest {
     }
 
     @Test
-    fun `a superseded model directory is removed before the download starts`() = runTest {
-        // The 20M model the 2023-06-26 default replaced: its directory keeps its files (and
-        // its 42 MB) after the catalogue moved on, and that free space is counted against the
-        // new archive.
-        val superseded = File(root, "sherpa-onnx-streaming-zipformer-en-20m").apply { mkdirs() }
+    fun `a model directory the router does not run is removed before the install`() = runTest {
+        // The router runs exactly one model. A leftover directory — the previous quality's
+        // model, or one that has left the catalogue — is space the new archive needs, so the
+        // install reclaims it before the free-space check counts anything.
+        val superseded = File(root, "sherpa-onnx-streaming-zipformer-en-20m-fp32").apply { mkdirs() }
         File(superseded, "encoder.onnx").writeBytes(ByteArray(4))
-        val kept = File(root, SpeechModels.onDeviceDefault.id).apply { mkdirs() }
+        val previous = File(root, SpeechModels.onDeviceFast.id).apply { mkdirs() }
         val downloader = FakeDownloader()
 
         repository(downloader).download(model)
+        advanceUntilIdle()
 
         assertFalse("the replaced model must not survive the swap", superseded.exists())
-        assertTrue("a model the catalogue still lists must be kept", kept.exists())
+        assertFalse("the previous quality's model must not compete for space", previous.exists())
     }
 
     @Test
@@ -212,9 +220,98 @@ class SpeechModelRepositoryTest {
         assertEquals(ModelDownloadState.Installed, repository.downloadState.value)
     }
 
+    @Test
+    fun `the active model follows the device's RAM while the choice is automatic`() = runTest {
+        val small = repository(FakeDownloader(), totalRamBytes = FakeDeviceCapabilities.FOUR_GIGABYTES)
+        val large = repository(FakeDownloader(), totalRamBytes = FakeDeviceCapabilities.EIGHT_GIGABYTES)
+
+        assertEquals(SpeechModels.onDeviceFast, small.activeModel.value)
+        assertEquals(SpeechModels.onDeviceAccurate, large.activeModel.value)
+    }
+
+    @Test
+    fun `an explicit quality overrides the device's RAM`() = runTest {
+        val repository = repository(
+            FakeDownloader(),
+            settings = FakeSettingsRepository(LoquiSettings(modelQuality = ModelQuality.ACCURATE)),
+            totalRamBytes = FakeDeviceCapabilities.FOUR_GIGABYTES,
+        )
+
+        assertEquals(SpeechModels.onDeviceAccurate, repository.activeModel.value)
+    }
+
+    @Test
+    fun `switching quality re-routes the model and frees the old install`() = runTest {
+        // Both models on disk: the switch must make the new one active and reclaim the old
+        // one's 43 MiB rather than leaving two models installed forever.
+        installOnDisk(SpeechModels.onDeviceFast)
+        installOnDisk(SpeechModels.onDeviceAccurate)
+        val settings = FakeSettingsRepository(LoquiSettings(modelQuality = ModelQuality.FAST))
+        val repository = repository(FakeDownloader(), settings = settings)
+        assertEquals(SpeechModels.onDeviceFast, repository.activeModel.value)
+        assertEquals(ModelDownloadState.Installed, repository.downloadState.value)
+
+        settings.setModelQuality(ModelQuality.ACCURATE)
+        advanceUntilIdle()
+
+        assertEquals(SpeechModels.onDeviceAccurate, repository.activeModel.value)
+        assertEquals(ModelDownloadState.Installed, repository.downloadState.value)
+        assertNotNull(repository.activePaths())
+        assertFalse(
+            "the fast model's directory must be reclaimed",
+            File(root, SpeechModels.onDeviceFast.id).exists(),
+        )
+        assertTrue(File(root, SpeechModels.onDeviceAccurate.id).isDirectory)
+    }
+
+    @Test
+    fun `a quality switch keeps the old install until the new model is on disk`() = runTest {
+        // Deleting the only usable model on the way to a download would leave the phone
+        // with nothing to recognise with — and no way to dictate while it downloads.
+        installOnDisk(SpeechModels.onDeviceFast)
+        val settings = FakeSettingsRepository(LoquiSettings(modelQuality = ModelQuality.FAST))
+        val repository = repository(FakeDownloader(), settings = settings)
+
+        settings.setModelQuality(ModelQuality.ACCURATE)
+        advanceUntilIdle()
+
+        assertEquals(SpeechModels.onDeviceAccurate, repository.activeModel.value)
+        assertEquals(ModelDownloadState.NotInstalled, repository.downloadState.value)
+        assertTrue(
+            "the old install is still the fallback until the new one lands",
+            File(root, SpeechModels.onDeviceFast.id).isDirectory,
+        )
+    }
+
+    @Test
+    fun `an install that does not match the active model is cancelled by a switch`() = runTest {
+        val downloader = FakeDownloader(blockForever = true)
+        val settings = FakeSettingsRepository(LoquiSettings(modelQuality = ModelQuality.FAST))
+        val repository = repository(
+            downloader,
+            settings = settings,
+            totalRamBytes = FakeDeviceCapabilities.EIGHT_GIGABYTES,
+        )
+
+        // The explicit setting wins over the 8 GB device, so the fast model is active and
+        // its install is what the switch has to interrupt.
+        assertEquals(SpeechModels.onDeviceFast, repository.activeModel.value)
+        repository.downloadActiveModel()
+        assertEquals(1, downloader.downloadCalls)
+
+        settings.setModelQuality(ModelQuality.ACCURATE)
+        advanceUntilIdle()
+
+        assertEquals(SpeechModels.onDeviceAccurate, repository.activeModel.value)
+        assertEquals(ModelDownloadState.NotInstalled, repository.downloadState.value)
+        assertFalse(File(root, ".${SpeechModels.onDeviceFast.id}.archive.part").exists())
+    }
+
     private fun TestScope.repository(
         downloader: ModelDownloader,
         freeBytes: Long = Long.MAX_VALUE,
+        settings: FakeSettingsRepository = FakeSettingsRepository(),
+        totalRamBytes: Long = FakeDeviceCapabilities.FOUR_GIGABYTES,
     ): FileSpeechModelRepository = FileSpeechModelRepository(
         modelStorage = object : ModelStorage {
             override val modelsDirectory: File = root
@@ -223,9 +320,30 @@ class SpeechModelRepositoryTest {
         storageProbe = object : ModelStorageProbe {
             override fun freeBytes(): Long = freeBytes
         },
+        settingsRepository = settings,
+        capabilities = FakeDeviceCapabilities(totalRamBytes),
         ioDispatcher = UnconfinedTestDispatcher(testScheduler),
-        scope = this,
+        // The settings collector runs for the life of the process, so it cannot own a job
+        // `runTest` waits for. It also has to run eagerly: an unconfined dispatcher applies
+        // the saved setting the moment the repository is built, which is what the real
+        // collector does on the application scope within milliseconds of process start.
+        scope = CoroutineScope(
+            backgroundScope.coroutineContext + UnconfinedTestDispatcher(testScheduler),
+        ),
     )
+
+    /**
+     * Puts [model] on disk exactly as a completed install leaves it.
+     *
+     * Sparse files (`setLength`) instead of written buffers: the accurate model's encoder is
+     * 70 MB, and the repository only ever asks for a file's length.
+     */
+    private fun installOnDisk(model: SpeechModel) {
+        val directory = File(root, model.id).apply { mkdirs() }
+        model.files.forEach { spec ->
+            RandomAccessFile(File(directory, spec.fileName), "rw").use { it.setLength(spec.sizeBytes) }
+        }
+    }
 
     private class FakeDownloader(
         private val verifyFailure: ModelDownloadFailure? = null,

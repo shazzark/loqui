@@ -8,6 +8,7 @@ import com.loqui.android.models.SpeechModel
 import com.loqui.android.models.SpeechModels
 import com.loqui.android.settings.AsrMode
 import com.loqui.android.settings.LlmMode
+import com.loqui.android.settings.ModelQuality
 
 /** Everything the home screen renders, already resolved into plain values. */
 data class HomeUiState(
@@ -22,9 +23,12 @@ data class HomeUiState(
     /** True when Android will not throttle Loqui's background work. */
     val batteryExempt: Boolean = false,
     val accessibilityDisclosureAccepted: Boolean = false,
-    val model: SpeechModel = SpeechModels.onDeviceDefault,
+    /** The user's choice; Auto defers to [model], which the router has already resolved. */
+    val modelQuality: ModelQuality = ModelQuality.AUTO,
+    /** The model this device should run, as chosen by `ModelRouting`. */
+    val model: SpeechModel = SpeechModels.onDeviceAccurate,
     val storage: ModelStorageReport = ModelStorageReport(
-        requiredBytes = SpeechModels.onDeviceDefault.requiredBytes,
+        requiredBytes = SpeechModels.onDeviceAccurate.requiredBytes,
         freeBytes = 0L,
     ),
     /** Download/install progress for [model]; the card renders every stage. */
@@ -32,6 +36,10 @@ data class HomeUiState(
 ) {
     val modelInstalled: Boolean
         get() = modelDownload == ModelDownloadState.Installed
+
+    /** True when the user picked a model instead of leaving the choice to the device. */
+    val modelOverridden: Boolean
+        get() = modelQuality != ModelQuality.AUTO
 
     /** Cloud mode is selected but the user has not supplied a key yet. */
     val needsCloudKey: Boolean

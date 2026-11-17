@@ -13,12 +13,14 @@ import com.loqui.android.core.BatteryOptimizations
 import com.loqui.android.core.PermissionStatus
 import com.loqui.android.core.Permissions
 import com.loqui.android.hardening.captureStartFailureMessage
+import com.loqui.android.models.ModelDownloadState
 import com.loqui.android.models.ModelStorageProbe
 import com.loqui.android.models.ModelStorageReport
+import com.loqui.android.models.SpeechModel
 import com.loqui.android.models.SpeechModelRepository
-import com.loqui.android.models.SpeechModels
 import com.loqui.android.settings.AsrMode
 import com.loqui.android.settings.LlmMode
+import com.loqui.android.settings.ModelQuality
 import com.loqui.android.settings.ProviderIds
 import com.loqui.android.settings.SecretStore
 import com.loqui.android.settings.SettingsRepository
@@ -30,6 +32,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import timber.log.Timber
@@ -66,13 +69,37 @@ class HomeViewModel @Inject constructor(
         DeviceState(permissions, battery, keys, storage)
     }
 
+    /**
+     * What the router decided and how far its install has got.
+     *
+     * Kept out of [uiState]'s own `combine` because five sources already fill its typed
+     * overload, and the quality is nested in settings rather than a flow of its own.
+     * `Auto` is the first value for the same reason the repository starts there: it is the
+     * default setting, so it is only wrong for a user who changed it, and only until
+     * DataStore's first emission.
+     */
+    private val modelState = combine(
+        settingsRepository.settings.map { it.modelQuality },
+        modelRepository.activeModel,
+        modelRepository.downloadState,
+    ) { quality, model, download -> ModelState(quality, model, download) }
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.Eagerly,
+            initialValue = ModelState(
+                quality = ModelQuality.AUTO,
+                model = modelRepository.activeModel.value,
+                download = modelRepository.downloadState.value,
+            ),
+        )
+
     val uiState: StateFlow<HomeUiState> = combine(
         settingsRepository.settings,
         deviceState,
         bubbleRunning,
         captureStateHolder.state,
-        modelRepository.downloadState,
-    ) { settings, device, bubble, captureState, download ->
+        modelState,
+    ) { settings, device, bubble, captureState, model ->
         HomeUiState(
             asrMode = settings.asrMode,
             llmEnabled = settings.llmEnabled,
@@ -84,9 +111,12 @@ class HomeViewModel @Inject constructor(
             captureState = captureState,
             batteryExempt = device.batteryExempt,
             accessibilityDisclosureAccepted = settings.accessibilityDisclosureAccepted,
-            model = SpeechModels.onDeviceDefault,
-            storage = device.storage,
-            modelDownload = download,
+            modelQuality = model.quality,
+            model = model.model,
+            // The space check follows the model the router picked: switching quality moves
+            // the bar between 43 and 68 MiB of installed files plus the archive.
+            storage = device.storage.copy(requiredBytes = model.model.requiredBytes),
+            modelDownload = model.download,
         )
     }.stateIn(
         scope = viewModelScope,
@@ -96,8 +126,12 @@ class HomeViewModel @Inject constructor(
             hasCloudKey = storedKeys.value.asr,
             hasLlmKey = storedKeys.value.llm,
             batteryExempt = batteryState.value,
-            storage = storageReport.value,
-            modelDownload = modelRepository.downloadState.value,
+            modelQuality = modelState.value.quality,
+            model = modelState.value.model,
+            storage = storageReport.value.copy(
+                requiredBytes = modelState.value.model.requiredBytes,
+            ),
+            modelDownload = modelState.value.download,
         ),
     )
 
@@ -133,6 +167,15 @@ class HomeViewModel @Inject constructor(
 
     fun setLlmMode(mode: LlmMode) {
         viewModelScope.launch { settingsRepository.setLlmMode(mode) }
+    }
+
+    /**
+     * Records the quality choice. The repository re-routes on the next settings emission:
+     * it becomes the active model, the old install is dropped, and Home's card switches to
+     * the new model's install state.
+     */
+    fun setModelQuality(quality: ModelQuality) {
+        viewModelScope.launch { settingsRepository.setModelQuality(quality) }
     }
 
     /**
@@ -231,9 +274,9 @@ class HomeViewModel @Inject constructor(
         VoiceInputService.cancel(context)
     }
 
-    /** Starts or resumes the 122 MiB install; the repository owns the transfer. */
+    /** Starts or resumes the install for the model the router picked. */
     fun downloadModel() {
-        modelRepository.download(SpeechModels.onDeviceDefault)
+        modelRepository.downloadActiveModel()
     }
 
     fun cancelModelDownload() {
@@ -250,7 +293,7 @@ class HomeViewModel @Inject constructor(
 
     /** Free space on the volume a model download would be extracted into. */
     private fun currentStorageReport(): ModelStorageReport = ModelStorageReport(
-        requiredBytes = SpeechModels.onDeviceDefault.requiredBytes,
+        requiredBytes = modelRepository.activeModel.value.requiredBytes,
         freeBytes = modelStorageProbe.freeBytes(),
     )
 
@@ -260,6 +303,13 @@ class HomeViewModel @Inject constructor(
 
     /** Which provider keys are present, collapsed so the UI combine stays readable. */
     private data class StoredKeys(val asr: Boolean, val llm: Boolean)
+
+    /** The router's decision, the user's choice behind it, and the install in progress. */
+    private data class ModelState(
+        val quality: ModelQuality,
+        val model: SpeechModel,
+        val download: ModelDownloadState,
+    )
 
     /** Everything read from the device rather than from the user's settings. */
     private data class DeviceState(

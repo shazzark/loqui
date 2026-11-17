@@ -16,6 +16,8 @@ import com.loqui.android.insertion.TextInserter
 import com.loqui.android.llm.DefaultLlmProviderFactory
 import com.loqui.android.llm.LlmProviderFactory
 import com.loqui.android.models.AppModelStorage
+import com.loqui.android.models.AndroidDeviceCapabilities
+import com.loqui.android.models.DeviceCapabilities
 import com.loqui.android.models.DeviceModelStorageProbe
 import com.loqui.android.models.FileSpeechModelRepository
 import com.loqui.android.models.KtorModelDownloader
@@ -62,9 +64,11 @@ object DispatchersModule {
 object AudioModule {
 
     /**
-     * Endpointing defaults: 20 ms frames, 60 ms of speech to start an utterance, 800 ms
-     * of silence to end it, and a 500 ms opening window in which the detector measures
-     * the room before it decides what speech is.
+     * Endpointing defaults: 20 ms frames, 60 ms of speech to start an utterance, 600 ms of
+     * silence to end it, and a 300 ms opening window in which the detector measures the
+     * room before it decides what speech is. A frame also has to stay within a sixth of the
+     * utterance's own peak RMS to count as speech, so trailing off ends the utterance even
+     * when the room gate still hears it.
      */
     @Provides
     @Singleton
@@ -126,6 +130,14 @@ abstract class AppBindingsModule {
 
     @Binds
     abstract fun bindSpeechModelRepository(impl: FileSpeechModelRepository): SpeechModelRepository
+
+    /**
+     * RAM decides which on-device model the router picks, so it is read once at start-up
+     * from `ActivityManager` rather than from a device-API surface the UI would have to
+     * thread through.
+     */
+    @Binds
+    abstract fun bindDeviceCapabilities(impl: AndroidDeviceCapabilities): DeviceCapabilities
 }
 
 @Module

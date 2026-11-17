@@ -74,6 +74,7 @@ fun LoquiApp() {
         else -> HomeScreen(
             uiState = uiState,
             onSelectAsrMode = viewModel::selectAsrMode,
+            onSelectModelQuality = viewModel::setModelQuality,
             onSaveCloudKey = viewModel::saveCloudKey,
             onRemoveCloudKey = viewModel::removeCloudKey,
             onSaveLlmKey = viewModel::saveLlmKey,

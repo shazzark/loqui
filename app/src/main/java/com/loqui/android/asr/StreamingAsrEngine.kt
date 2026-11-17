@@ -33,6 +33,15 @@ interface StreamingAsrSession {
 /** Creates sessions from an installed model. Loading the recogniser is cached internally. */
 interface StreamingAsrEngine {
     fun open(paths: ModelPaths, sampleRateHz: Int): StreamingAsrSession
+
+    /**
+     * Frees the cached recogniser. The next [open] loads its graphs again.
+     *
+     * Worth calling when the recogniser stops being wanted — the user switched to cloud
+     * mode, or to a different on-device model — because the graphs are tens of megabytes
+     * that nothing else on a phone reclaims while the process lives.
+     */
+    fun release() {}
 }
 
 /**
@@ -52,7 +61,7 @@ class SherpaOnnxStreamingEngine @Inject constructor() : StreamingAsrEngine {
     private var recognizerKey: String? = null
 
     override fun open(paths: ModelPaths, sampleRateHz: Int): StreamingAsrSession {
-        val key = "${paths.directory.absolutePath}|$sampleRateHz"
+        val key = "${paths.directory.absolutePath}|${paths.modelType}|$sampleRateHz"
 
         val active = synchronized(lock) {
             val current = recognizer
@@ -68,6 +77,14 @@ class SherpaOnnxStreamingEngine @Inject constructor() : StreamingAsrEngine {
         }
 
         return SherpaSession(active, active.createStream())
+    }
+
+    override fun release() {
+        synchronized(lock) {
+            recognizer?.release()
+            recognizer = null
+            recognizerKey = null
+        }
     }
 
     private fun createRecognizer(paths: ModelPaths, sampleRateHz: Int): OnlineRecognizer {
@@ -87,11 +104,12 @@ class SherpaOnnxStreamingEngine @Inject constructor() : StreamingAsrEngine {
                 numThreads = NUM_THREADS,
                 debug = false,
                 provider = "cpu",
-                // Must match the encoder's own metadata. The installed export reports
-                // `model_type: zipformer2` (chunk-16, 128 frames of left context); asking
-                // for "zipformer" builds the legacy transducer class against those outputs
-                // and throws instead of recognising.
-                modelType = MODEL_TYPE,
+                // Must match the encoder's own metadata, which is why the catalogue records
+                // it per model: the 2023-06-26 export reports `zipformer2` (chunk-16, 128
+                // frames of left context) and the 20M export reports plain `zipformer`.
+                // Asking for the wrong one builds the wrong transducer class against those
+                // outputs and throws instead of recognising.
+                modelType = paths.modelType,
             ),
             // Endpointing is Loqui's job (`SpeechEndpointer`); resetting inside sherpa
             // would split one dictation into several unrelated results.
@@ -131,9 +149,6 @@ class SherpaOnnxStreamingEngine @Inject constructor() : StreamingAsrEngine {
     private companion object {
         /** Zipformer streaming models use 80-dimensional fbank features. */
         const val FEATURE_DIM = 80
-
-        /** The `model_type` the installed encoder declares in its ONNX metadata. */
-        const val MODEL_TYPE = "zipformer2"
 
         /**
          * Intra-op threads for the decoder. The 2023-06-26 encoder is roughly 1.6x the

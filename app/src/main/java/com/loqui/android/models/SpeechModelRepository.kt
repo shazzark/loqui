@@ -2,6 +2,8 @@ package com.loqui.android.models
 
 import com.loqui.android.di.ApplicationScope
 import com.loqui.android.di.IoDispatcher
+import com.loqui.android.settings.ModelQuality
+import com.loqui.android.settings.SettingsRepository
 import java.io.File
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -12,29 +14,44 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import timber.log.Timber
 
 /**
- * Owns the installed on-device model: what is on disk, how a download progresses, and
- * where the recogniser can find its files.
+ * Owns the installed on-device model: which model this device should run, what is on disk,
+ * how a download progresses, and where the recogniser can find its files.
+ *
+ * The active model is not a constant. [ModelRouting] resolves it from the user's
+ * [ModelQuality] setting and the device's RAM, and the repository follows that decision:
+ * when a switch is made it stops any download for the old model, frees the old model's
+ * directory, and reports the new model's install state.
  *
  * The download lives in the application scope, not a ViewModel: rotating the screen or
- * leaving Home must not cancel a 296 MiB transfer. The staging directory is renamed into
+ * leaving Home must not cancel a 310 MiB transfer. The staging directory is renamed into
  * place only after every file's SHA-256 matches, so [paths] never returns a half-written
  * model.
  */
 interface SpeechModelRepository {
+    /** The model the router wants installed and running on this device. */
+    val activeModel: StateFlow<SpeechModel>
+
     val downloadState: StateFlow<ModelDownloadState>
 
-    fun isInstalled(model: SpeechModel = SpeechModels.onDeviceDefault): Boolean
+    fun isInstalled(model: SpeechModel): Boolean
 
     /** Installed and complete, or null while the model is missing. */
-    fun paths(model: SpeechModel = SpeechModels.onDeviceDefault): ModelPaths?
+    fun paths(model: SpeechModel): ModelPaths?
 
-    fun download(model: SpeechModel = SpeechModels.onDeviceDefault)
+    fun download(model: SpeechModel)
 
     fun cancelDownload()
+
+    /** [paths] for [activeModel], which is what the recogniser and Home both want. */
+    fun activePaths(): ModelPaths? = paths(activeModel.value)
+
+    fun downloadActiveModel() = download(activeModel.value)
 }
 
 @Singleton
@@ -42,12 +59,24 @@ class FileSpeechModelRepository @Inject constructor(
     private val modelStorage: ModelStorage,
     private val downloader: ModelDownloader,
     private val storageProbe: ModelStorageProbe,
+    private val settingsRepository: SettingsRepository,
+    private val capabilities: DeviceCapabilities,
     @IoDispatcher private val ioDispatcher: CoroutineDispatcher,
     @ApplicationScope private val scope: CoroutineScope,
 ) : SpeechModelRepository {
 
+    /**
+     * Auto until the user's saved choice arrives. DataStore's first emission lands within
+     * milliseconds of process start, and Auto is the default setting, so this is the
+     * correct answer for everyone who never changed it and a one-emission placeholder for
+     * everyone else.
+     */
+    private val resolvedModel = MutableStateFlow(route(ModelQuality.AUTO))
+
+    override val activeModel: StateFlow<SpeechModel> = resolvedModel.asStateFlow()
+
     private val state = MutableStateFlow<ModelDownloadState>(
-        if (paths(SpeechModels.onDeviceDefault) != null) {
+        if (paths(resolvedModel.value) != null) {
             ModelDownloadState.Installed
         } else {
             ModelDownloadState.NotInstalled
@@ -59,6 +88,19 @@ class FileSpeechModelRepository @Inject constructor(
     @Volatile
     private var job: Job? = null
 
+    /** The model [job] is installing; null when nothing is in flight. */
+    @Volatile
+    private var downloading: SpeechModel? = null
+
+    init {
+        scope.launch {
+            settingsRepository.settings
+                .map { it.modelQuality }
+                .distinctUntilChanged()
+                .collect { quality -> onQualityChanged(quality) }
+        }
+    }
+
     override fun isInstalled(model: SpeechModel): Boolean = paths(model) != null
 
     override fun paths(model: SpeechModel): ModelPaths? {
@@ -69,7 +111,7 @@ class FileSpeechModelRepository @Inject constructor(
             val file = File(directory, spec.fileName)
             file.isFile && file.length() == spec.sizeBytes
         }
-        return if (complete) ModelPaths(directory) else null
+        return if (complete) ModelPaths(directory, model.modelType) else null
     }
 
     override fun download(model: SpeechModel) {
@@ -83,10 +125,11 @@ class FileSpeechModelRepository @Inject constructor(
             return
         }
 
-        // A superseded model is dead weight the space check would otherwise count against the
-        // new archive: swapping the default model leaves the previous directory behind, and
-        // on a phone that is the difference between "download" and "not enough space".
-        pruneSupersededModels(model)
+        // A model the router no longer wants is dead weight the space check would otherwise
+        // count against the new archive: a quality switch leaves the previous directory
+        // behind, and on a phone that is the difference between "download" and "not enough
+        // space". Only the model being installed survives.
+        pruneInactiveModels(model)
 
         val onDisk = partFile(model).length().coerceAtLeast(0L)
         val remaining = (model.requiredBytes - onDisk).coerceAtLeast(0L)
@@ -95,12 +138,46 @@ class FileSpeechModelRepository @Inject constructor(
             return
         }
 
+        downloading = model
         job = scope.launch(ioDispatcher) { install(model) }
     }
 
     override fun cancelDownload() {
         job?.cancel()
+        downloading = null
     }
+
+    /**
+     * Follows the router when the user changes quality.
+     *
+     * Three things have to happen in order: the new model becomes active so the recogniser
+     * and Home stop pointing at the old one, any install for the old model is abandoned
+     * (its bytes are about to be deleted), and the old model's directory is removed — but
+     * only once the new model is known to be installed, because a phone with neither model
+     * on disk has nothing to recognise with while the new one downloads.
+     */
+    private fun onQualityChanged(quality: ModelQuality) {
+        val model = route(quality)
+        if (model.id == resolvedModel.value.id) return
+
+        Timber.i(
+            "On-device quality %s resolves to %s (was %s)",
+            quality,
+            model.id,
+            resolvedModel.value.id,
+        )
+        resolvedModel.value = model
+        if (downloading != null && downloading?.id != model.id) {
+            cancelDownload()
+        }
+
+        val installed = paths(model) != null
+        state.value = if (installed) ModelDownloadState.Installed else ModelDownloadState.NotInstalled
+        if (installed) pruneInactiveModels(model)
+    }
+
+    private fun route(quality: ModelQuality): SpeechModel =
+        ModelRouting.resolve(quality, capabilities.totalRamBytes())
 
     private suspend fun install(model: SpeechModel) {
         val part = partFile(model)
@@ -168,6 +245,9 @@ class FileSpeechModelRepository @Inject constructor(
 
             state.value = ModelDownloadState.Failed(failure)
             Timber.w(throwable, "On-device model install failed: %s", failure)
+        } finally {
+            downloading = null
+            job = null
         }
     }
 
@@ -178,23 +258,21 @@ class FileSpeechModelRepository @Inject constructor(
         File(modelStorage.modelsDirectory, ".${model.id}.staging")
 
     /**
-     * Deletes model directories the catalogue no longer offers.
+     * Deletes every model directory except [active]'s.
      *
-     * Nothing else removes them: the id is the directory name, so a swapped default model
-     * becomes an orphan the moment the catalogue changes — 42 MB of the 20M model when the
-     * 2023-06-26 export replaced it. Only directories are touched (a `.part` file belongs to
-     * a download in flight, and dot-directories are staging), and every model the catalogue
-     * still lists is kept.
+     * Two models can never be useful at once: the router runs exactly one, and keeping the
+     * other costs its installed size — 43 MiB for the 20M export, 68 MiB for the accurate
+     * one — on a phone where that is the difference between "download" and "not enough
+     * space". Only directories are touched: a `.part` file belongs to a download in flight
+     * and dot-directories are staging, so a prune can never race an install.
      */
-    private fun pruneSupersededModels(current: SpeechModel) {
-        val keep = SpeechModels.all.mapTo(HashSet()) { it.id }.apply { add(current.id) }
-
+    private fun pruneInactiveModels(active: SpeechModel) {
         modelStorage.modelsDirectory.listFiles()?.forEach { entry ->
-            val superseded = entry.isDirectory &&
+            val inactive = entry.isDirectory &&
                 !entry.name.startsWith(".") &&
-                entry.name !in keep
-            if (superseded && entry.deleteRecursively()) {
-                Timber.i("Removed superseded on-device model %s", entry.name)
+                entry.name != active.id
+            if (inactive && entry.deleteRecursively()) {
+                Timber.i("Removed inactive on-device model %s", entry.name)
             }
         }
     }

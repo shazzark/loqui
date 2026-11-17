@@ -11,7 +11,7 @@ package com.loqui.android.audio.vad
  * [maxSpeechRmsThreshold]. A fixed gate only ever moves the failure: too high and the
  * onset never confirms (a Galaxy A13 delivered ~0.0003 RMS for *speech* through the
  * `VOICE_RECOGNITION` chain, so `0.003`-`0.015` gates heard nothing at all), too low and
- * room tone at ~0.0002 trips the onset, the utterance runs to the 15 s ceiling and the
+ * room tone at ~0.0002 trips the onset, the utterance runs to the 10 s ceiling and the
  * recogniser is handed noise.
  *
  * @param frameDurationMs audio carried by one frame; must match the capture stream.
@@ -30,10 +30,17 @@ package com.loqui.android.audio.vad
  *   calibration (the gate stays at [minSpeechRmsThreshold]).
  * @param onsetFrames consecutive speech frames needed before an utterance starts;
  *   filters single-frame clicks and key taps.
+ * @param relativeSilenceFactor how far below the utterance's own peak a frame has to fall
+ *   before it counts as silence, whatever the absolute gate says. See [EnergyVad]: a gate
+ *   measured from room tone cannot tell a pause from a quiet phrase, so the detector also
+ *   asks whether the frame is *this much* quieter than the loudest part of what it is
+ *   currently transcribing. `0.15` is roughly 16 dB down from the peak — a vowel's tail and
+ *   a held breath fall below it, a soft word does not.
  * @param silenceHangoverFrames consecutive silent frames that end the utterance;
- *   800 ms tolerates natural pauses without splitting a sentence.
+ *   600 ms (30 frames) is long enough for the pauses inside a sentence and short enough
+ *   that the transcript is not left waiting after the user stops talking.
  * @param maxUtteranceMs hard ceiling so one utterance cannot hang a session; a monologue
- *   is cut at 15 s and whatever was captured still reaches the recogniser.
+ *   is cut at 10 s and whatever was captured still reaches the recogniser.
  * @param noSpeechTimeoutMs how long a session may wait for the first confirmed speech
  *   before it is closed. A tap that is never followed by speech still has to produce an
  *   outcome, otherwise the bubble sits on "Listening" until the ASR hard limit. 8 s
@@ -44,10 +51,11 @@ data class VadConfig(
     val minSpeechRmsThreshold: Float = MIN_SPEECH_RMS,
     val maxSpeechRmsThreshold: Float = 0.02f,
     val noiseFloorMultiplier: Float = 2f,
+    val relativeSilenceFactor: Float = 0.15f,
     val calibrationMs: Int = 300,
     val onsetFrames: Int = 3,
-    val silenceHangoverFrames: Int = 40,
-    val maxUtteranceMs: Int = 15_000,
+    val silenceHangoverFrames: Int = 30,
+    val maxUtteranceMs: Int = 10_000,
     val noSpeechTimeoutMs: Int = 8_000,
 ) {
 
@@ -58,6 +66,9 @@ data class VadConfig(
             "maxSpeechRmsThreshold must not be below minSpeechRmsThreshold"
         }
         require(noiseFloorMultiplier >= 1f) { "noiseFloorMultiplier must be at least 1" }
+        require(relativeSilenceFactor > 0f && relativeSilenceFactor < 1f) {
+            "relativeSilenceFactor must be between 0 and 1"
+        }
         require(calibrationMs >= 0) { "calibrationMs must not be negative" }
         require(onsetFrames > 0) { "onsetFrames must be positive" }
         require(silenceHangoverFrames > 0) { "silenceHangoverFrames must be positive" }

@@ -129,12 +129,20 @@ class SpeechEndpointerTest {
     }
 
     @Test
-    fun `the default ceilings are fifteen seconds of speech and eight without`() {
+    fun `the default ceilings are ten seconds of speech and eight without`() {
         val defaults = VadConfig()
 
-        assertEquals(750, defaults.maxUtteranceFrames)
+        // Ten seconds, not fifteen: the old ceiling was long enough that a talker who
+        // trailed off into the gate's blind spot left the bubble listening for a quarter of
+        // a minute. Anything still running at 10 s is better served by an early final.
+        assertEquals(500, defaults.maxUtteranceFrames)
         assertEquals(400, defaults.noSpeechTimeoutFrames)
         assertEquals(8_000, defaults.noSpeechTimeoutMs)
+        // 600 ms of hangover: long enough for the pauses inside a sentence, short enough
+        // that the transcript is not left waiting once the user has stopped.
+        assertEquals(30, defaults.silenceHangoverFrames)
+        assertEquals(600, defaults.silenceHangoverFrames * defaults.frameDurationMs)
+        assertEquals(0.15f, defaults.relativeSilenceFactor, 0f)
         assertTrue(
             "the gate must sit below what a phone mic delivers at arm's length",
             defaults.minSpeechRmsThreshold <= 0.01f,

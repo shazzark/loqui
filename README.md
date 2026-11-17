@@ -10,9 +10,10 @@ the transcript is pasted into the focused field through the accessibility servic
 lands on the clipboard with a toast when no field is focused. An optional clean-up pass
 fixes punctuation and capitalisation, capped at **one second**; when it is off, slow,
 failing or has no key, the raw transcript is inserted. Phase 6 replaces the on-device
-stand-in with **sherpa-onnx** streaming Zipformer — the 2023-06-26 `chunk-16-left-128`
-export, not the 20M model the first pass shipped — downloaded from the official release
-into app-private storage, checksum-verified per file and unpacked only after the archive
+stand-in with **sherpa-onnx** streaming Zipformer from the official releases — the
+2023-06-26 `chunk-16-left-128` export (`zipformer2`) on phones that can run it, the 20M
+export on the rest, chosen from the device's RAM with a manual override — downloaded into
+app-private storage, checksum-verified per file and unpacked only after the archive
 matches. The bubble, permissions, privacy paperwork and distribution work from Phases 3-5
 stay intact. All of it with **zero API keys**; the only network request is the model
 download the user explicitly starts.
@@ -40,11 +41,12 @@ that is a bug.
 | Microphone owner | `capture/VoiceInputService` | `microphone` foreground service; the only recorder |
 | Capture | `audio/AudioCaptureStream` + `audio/AudioRecordPcmSource` | `AudioRecord` 16 kHz mono PCM-16, 20 ms frames, released as soon as collection stops |
 | Ring buffer | `audio/AudioRingBuffer` | Bounded circular buffer between the blocking read and the consumer; drops oldest audio and counts the loss |
-| Endpointing | `audio/vad/SpeechEndpointer` + `audio/vad/EnergyVad` | Gate measured from the first 300 ms of the room (`noiseFloor × 2`, clamped to `0.0005..0.02`) → onset (60 ms) → speech → hangover (800 ms) → utterance complete; a session also closes after 8 s without speech and is cut at 15 s, so a mis-tuned gate can never hold the bubble |
+| Endpointing | `audio/vad/SpeechEndpointer` + `audio/vad/EnergyVad` | Gate measured from the first 300 ms of the room (`noiseFloor × 2`, clamped to `0.0005..0.02`) → onset (60 ms) → speech, where a frame must also stay within `0.15 ×` the utterance's own peak RMS → hangover (600 ms) → utterance complete; a session also closes after 8 s without speech and is cut at 10 s, so a mis-tuned gate can never hold the bubble |
 | Floating trigger | `trigger/BubbleService` + `BubbleController` | `specialUse` overlay service: draggable disc, tap toggles capture, never records audio or touches the network |
 | Bubble states | `trigger/BubbleAppearance` | Pure mapping `CaptureState` → accent, short label, spinner, pulse; the only `View` code lives in `BubbleController` |
-| Recognition | `asr/AsrCoordinator`, `asr/AsrProviderFactory` | `asr/SherpaOnnxAsrProvider` on-device (sherpa-onnx streaming Zipformer 2023-06-26, int8 `chunk-16-left-128`); `asr/cloud/CloudAsrProvider` for opt-in cloud, gated on the user's key |
-| Recogniser warm-up | `asr/RecogniserWarmUp` | Loads the ONNX graphs from `Application.onCreate` and again when an install finishes, so the seconds-long load is never spent between the tap and the first recorded frame |
+| Recognition | `asr/AsrCoordinator`, `asr/AsrProviderFactory` | `asr/SherpaOnnxAsrProvider` on-device (sherpa-onnx streaming Zipformer 2023-06-26 int8 `chunk-16-left-128`, or the 20M export on small devices); `asr/cloud/CloudAsrProvider` for opt-in cloud, gated on the user's key |
+| Model routing | `models/ModelRouting`, `models/DeviceCapabilities` | Pure rule from the user's quality choice and `ActivityManager.totalMem`: Auto picks the accurate export from 6 GB of RAM, Fast and Accurate override it. One model runs at a time and the other's directory is reclaimed |
+| Recogniser warm-up | `asr/RecogniserWarmUp` | Loads the active model's ONNX graphs from `Application.onCreate` and again when an install finishes or the active model changes, off the main thread and without blocking start-up; releases them when nothing can use them |
 | Clean-up (optional) | `llm/LlmCoordinator`, `llm/LlmProviderFactory` | Off by default; `OnDeviceLlmCorrector` (deterministic punctuation) or `llm/cloud/CloudLlmCorrector`, hard-capped at 1 s — any skip inserts the raw transcript |
 | Prompt | `llm/LlmPrompt` | One reviewable instruction: fix punctuation, never add/remove words, reply with the text only |
 | Insertion | `insertion/DefaultTextInserter` | Always copies to clipboard first, then attempts an accessibility paste; clipboard is the guaranteed fallback |
@@ -153,7 +155,7 @@ On a real device with the debug build (no key, no model):
 2. "Start using Loqui" starts the bubble. Drag it anywhere; it stays over other apps.
 3. Open Chrome, focus the address bar or a text area, tap the bubble.
    - bubble turns red and pulses, label "Listening…"
-   - speak for ~2 s, then stop; after the 800 ms hangover the bubble shows "Working…"
+   - speak for ~2 s, then stop; after the 600 ms hangover the bubble shows "Working…"
    - the transcript ("This is a Loqui test transcript.") appears in the field and the
      bubble flashes green "Inserted"
 4. Tap the bubble again while it is listening → the session cancels back to idle.
@@ -239,10 +241,12 @@ On a real device, with the bubble running:
    accessibility row → the disclosure dialog appears first; *I understand* opens the system
    accessibility page, *Not now* leaves the clipboard path intact. After accepting once,
    the dialog no longer appears.
-6. **Model card.** *On-device model* shows the sherpa-onnx Zipformer entry, "About 296 MB
-   download · Apache 2.0 license · 68 MB on disk", the free-space line and an enabled
-   *Download model* button. A device with less free space than the archive plus its
-   unpacked copy shows the shortfall line and the download fails before any request.
+6. **Model card.** *On-device model* opens with the **Model quality** choice — Automatic,
+   Fast, Accurate — and under *Automatic* a line naming the model this device will run.
+   Below it the selected entry shows "About 296 MB download · Apache 2.0 license · 68 MB on
+   disk" (or 122 MB / 43 MB for Fast), the free-space line and an enabled *Download model*
+   button. A device with less free space than the archive plus its unpacked copy shows the
+   shortfall line and the download fails before any request.
 
 ## Tests: model download and on-device ASR (Phase 6)
 
@@ -260,9 +264,16 @@ with fakes, so no device or native library is needed:
   and test wavs in the same archive are not installed, a short entry, a checksum mismatch and
   a missing entry each fail the install and delete the file instead of leaving a 0-byte
   model, and an archive wrapped in an extra directory is still matched
-- `SpeechModelsTest` — the catalogue entry stays the larger `chunk-16-left-128` export (all
-  three transducer files from the same export, an encoder well above the 20M model's 42.8 MB)
-  and never ships under a license that forbids commercial use
+- `SpeechModelsTest` — both catalogue entries carry the `model_type` their encoder declares
+  (`zipformer2` for the 2023-06-26 export, `zipformer` for the 20M one), the accurate entry
+  is the larger `chunk-16-left-128` export (an encoder well above the 20M model's 42.8 MB),
+  and neither ships under a license that forbids commercial use
+- `ModelRoutingTest` — Automatic picks the accurate model from 6 GB of RAM and the fast one
+  below it, an explicit choice wins over the device, and an unreadable RAM total gets the
+  model that runs everywhere
+- `SpeechModelRepositoryTest` — a quality change re-routes the active model and cancels the
+  install for the model it left, keeps the old directory as a fallback until the new model
+  is installed, and reclaims it when the download starts (the archive needs the space)
 - `SherpaOnnxAsrProviderTest` — a missing model reports `MODEL_UNAVAILABLE` without opening
   the engine; frames become de-duplicated partials plus one trimmed final; zero usable audio
   (empty flow or torn frames) reports `NO_SPEECH` instead of inventing text; an engine that
@@ -348,8 +359,10 @@ No single constant can be both above room tone and below speech on every device,
 
 ### Model upgrade (2023-06-26 export) and first-partial latency
 
-The 20M model was replaced by the 2023-06-26 `chunk-16-left-128` export. Its encoder
-metadata is the authority on both counts:
+The 20M model was replaced by the 2023-06-26 `chunk-16-left-128` export. (It came back
+later as the catalogue's fast entry, once the router existed to choose between them — see
+*One phone, one model at a time* below.) Its encoder metadata is the authority on both
+counts:
 
 | | 20M (2023-02-17) | 2023-06-26 `chunk-16-left-128` |
 | --- | --- | --- |
@@ -376,6 +389,56 @@ What made a dictation feel stalled was everything around it:
   it is 300 ms now.
 - Two intra-op threads kept 42 MB of graphs ahead of the microphone; 68 MB needs more, so the
   engine asks for four (clamped to the cores the device actually has).
+
+### One phone, one model at a time (2026-11-17)
+
+Swapping the default to the accurate export fixed accuracy and created the next problem: on
+a 4 GB phone its 18-layer encoder cannot keep up with the microphone, so partials arrive
+behind the speaker and the backlog never clears — the transcript is not wrong, it is late,
+which the user reads as broken. The 20M export *is* good enough on that hardware. So the
+model is now a decision, not a constant:
+
+- `ModelRouting.resolve(quality, totalRamBytes)` is a pure function: Fast and Accurate are
+  what they say, Auto picks the accurate export at `6 GB` of total RAM and the fast one
+  below it. `ActivityManager.MemoryInfo.totalMem` is the input, not the heap limit, which
+  moves with `largeHeap` and says nothing about compute. An unreadable total is `0`, which
+  routes to the model that runs everywhere.
+- `DeviceCapabilities` is the interface that read sits behind, so the rule is unit-tested on
+  the JVM where no `ActivityManager` exists.
+- `modelQuality` is a stored setting (`asr.model.quality`, Auto by default) with a
+  three-row selector on the model card; the row under *Automatic* names the model this
+  device resolved to, because "Automatic" alone tells the user nothing about their phone.
+- `FileSpeechModelRepository` follows the router. A quality change re-routes `activeModel`,
+  abandons any install for the model it left, and drops the old directory **only once the
+  new model is installed** — a phone with neither model on disk has nothing to recognise
+  with while the new one downloads. Starting the download is the point where the old
+  directory goes, because the archive needs the space.
+- `SpeechModel.modelType` rides with the files into `ModelPaths` and into
+  `OnlineModelConfig.modelType`, and it is part of the engine's recogniser cache key: the
+  two exports are different transducer classes, and opening one with the other's config
+  throws instead of recognising.
+- `RecogniserWarmUp` re-warms on a *different* active model, so the switch costs the next
+  user a reload once. It also no longer blocks `Application.onCreate` (the load moved to
+  `Dispatchers.Default` inside the application scope) and releases the graphs when the
+  model is uninstalled or on-device mode is off, rather than holding tens of megabytes for
+  the life of the process.
+
+### Trailing off ends the utterance (2026-11-17)
+
+The energy gate sits where the room is, and a talker who leans back or trails off lands in
+the band between the room tone and the gate: every frame is still louder than the café, so
+the detector calls it speech, the utterance never falls silent, and it runs to the ceiling
+with the recogniser producing nothing new. The gate cannot fix that, because it has no idea
+how loud *this* speaker is. So a frame must now also stay within `relativeSilenceFactor`
+(`0.15`, about 16 dB down) of the loudest frame accepted since the session's `reset()`. The
+peak is kept for the whole utterance rather than in a sliding window, which would sink during
+a pause and start calling room tone speech again.
+
+Two defaults moved with it: the hangover is 600 ms (30 frames) instead of 800 ms, and the
+utterance ceiling is 10 s instead of 15 s. Both were budgets for a detector that could not
+tell a pause from a quiet phrase; a fence that is never needed is one the user waits behind.
+`SESSION_WATCHDOG_MS` is three times the ceiling, so a slow device that is still processing
+is not cut off.
 
 ### Dictation diagnostics (debug builds)
 
@@ -442,12 +505,15 @@ adb logcat -s AudioCaptureStream AudioRecordPcmSource EnergyVad SpeechEndpointer
 - Cloud clean-up is complete except its transport: `MockCloudLlmTransport` performs no
   network I/O, so an OpenAI/DeepSeek client drops in behind `LlmTransport` without
   touching the coordinator, the prompt or the 1 s budget.
-- The model catalogue has one English streaming Zipformer. A second language is a new
-  `SpeechModel` entry with measured archive and per-file checksums — no code change.
+- The catalogue has two English streaming Zipformers and one router. A second language is a
+  new `SpeechModel` entry with measured archive and per-file checksums, plus a line in
+  `ModelRouting` — no change to the install, warm-up or UI machinery.
 - The vendored sherpa-onnx AAR is committed under `app/libs` (49 MB) and the APK ships
   `arm64-v8a`, `armeabi-v7a` and `x86_64`; `x86` is the only ABI left out.
-- A reinstall does not rebuild an already-loaded recogniser: `SherpaOnnxStreamingEngine`
-  caches by model directory, so replacing the model takes effect after a process restart.
+- The recogniser cache key is the model directory **and** its `modelType`, so switching
+  quality loads the other export instead of reusing the wrong transducer class. A rebuild
+  of the *same* model still takes effect only after `RecogniserWarmUp` releases it (or the
+  process restarts).
 - The free-space line on the model card is refreshed when Home resumes, not live during or
   after an install.
 - The privacy policy is in-app only. Play requires a hosted URL as well, so the listing

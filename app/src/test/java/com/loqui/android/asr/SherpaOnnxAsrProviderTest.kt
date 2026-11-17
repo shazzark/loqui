@@ -4,6 +4,7 @@ import com.loqui.android.models.ModelDownloadState
 import com.loqui.android.models.ModelPaths
 import com.loqui.android.models.SpeechModel
 import com.loqui.android.models.SpeechModelRepository
+import com.loqui.android.models.SpeechModels
 import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -17,7 +18,10 @@ import org.junit.Test
 
 class SherpaOnnxAsrProviderTest {
 
-    private val paths = ModelPaths(File("build/tmp/models/test-model"))
+    private val paths = ModelPaths(
+        File("build/tmp/models/test-model"),
+        SpeechModels.ZIPFORMER2,
+    )
 
     @Test
     fun `a missing model is reported instead of falling back to a server`() = runTest {
@@ -189,6 +193,20 @@ class SherpaOnnxAsrProviderTest {
         assertTrue(engine.session.released)
     }
 
+    @Test
+    fun `release frees the cached recogniser without touching a session`() = runTest {
+        val engine = FakeEngine()
+        val provider = provider(paths = paths, engine = engine)
+
+        // Called when the user leaves on-device mode: the graphs must go, but nothing here
+        // may pretend a dictation was released on its behalf.
+        provider.release()
+
+        assertEquals(1, engine.releaseCount)
+        assertFalse(engine.opened)
+        assertFalse(engine.session.released)
+    }
+
     private fun provider(paths: ModelPaths?, engine: StreamingAsrEngine) = SherpaOnnxAsrProvider(
         models = FakeRepository(paths),
         engine = engine,
@@ -201,6 +219,7 @@ class SherpaOnnxAsrProviderTest {
         override val downloadState = MutableStateFlow<ModelDownloadState>(
             if (paths == null) ModelDownloadState.NotInstalled else ModelDownloadState.Installed,
         )
+        override val activeModel = MutableStateFlow(SpeechModels.onDeviceAccurate)
 
         override fun isInstalled(model: SpeechModel): Boolean = paths != null
 
@@ -233,6 +252,13 @@ class SherpaOnnxAsrProviderTest {
             openedPaths = paths
             if (failToOpen) throw IllegalStateException("no native library")
             return session
+        }
+
+        var releaseCount = 0
+            private set
+
+        override fun release() {
+            releaseCount++
         }
     }
 

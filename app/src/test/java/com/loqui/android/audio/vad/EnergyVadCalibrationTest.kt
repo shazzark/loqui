@@ -129,6 +129,64 @@ class EnergyVadCalibrationTest {
     }
 
     /**
+     * The gate is measured from the room, so it cannot tell a pause from a quiet phrase: a
+     * talker who leans back still sits above it. These cases pin the second half of the
+     * decision — a frame has to be within [VadConfig.relativeSilenceFactor] of this
+     * utterance's own peak.
+     */
+    @Test
+    fun `a frame far below the utterance's peak is a pause even above the gate`() {
+        val vad = detector(VadConfig(calibrationMs = 0))
+
+        assertTrue(
+            "the loud frame has to be accepted first",
+            vad.isSpeech(audioFrame(SPEECH_AMPLITUDE)),
+        )
+        assertEquals(SPEECH_AMPLITUDE / 32_768f, vad.peakSpeechRms, 1e-6f)
+
+        // ~0.018 RMS: thirty times the gate and still ten times below the peak. Without the
+        // relative test this opened a 10 s utterance that transcribed nothing.
+        val trailedOff = audioFrame(600)
+        assertTrue(Pcm16Signal.rms(trailedOff.pcm16) > vad.speechRmsThreshold)
+        assertFalse("a trailing-off tail must read as silence", vad.isSpeech(trailedOff))
+    }
+
+    @Test
+    fun `a soft word that is genuinely speech still counts`() {
+        val vad = detector(VadConfig(calibrationMs = 0))
+
+        vad.isSpeech(audioFrame(SPEECH_AMPLITUDE))
+
+        // Half the peak is a normal quiet word — ~6 dB down, not 16.
+        assertTrue(vad.isSpeech(audioFrame(SPEECH_AMPLITUDE / 2)))
+    }
+
+    @Test
+    fun `the peak is the loudest frame accepted, not the loudest frame seen`() {
+        val vad = detector(VadConfig(calibrationMs = 0))
+
+        // A frame that fails the gate must not raise the reference: otherwise one door slam
+        // would make the rest of the sentence look like a pause.
+        vad.isSpeech(audioFrame(SPEECH_AMPLITUDE))
+        vad.isSpeech(audioFrame(QUIET_AMPLITUDE))
+
+        assertEquals(SPEECH_AMPLITUDE / 32_768f, vad.peakSpeechRms, 1e-6f)
+    }
+
+    @Test
+    fun `a reset clears the utterance's peak`() {
+        val vad = detector(VadConfig(calibrationMs = 0))
+        vad.isSpeech(audioFrame(SPEECH_AMPLITUDE))
+        assertTrue(vad.peakSpeechRms > 0f)
+
+        vad.reset()
+
+        // The next utterance starts at a new distance; carrying the last peak over would
+        // make a user who moved back from the phone inaudible for the whole session.
+        assertEquals(0f, vad.peakSpeechRms, 0f)
+    }
+
+    /**
      * The failure the calibrated gate exists to prevent: with room tone above the gate,
      * onset confirms on noise, the utterance runs to the ceiling, and the recogniser is
      * handed 15 s of nothing.
