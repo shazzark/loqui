@@ -63,9 +63,9 @@ class EnergyVadCalibrationTest {
     fun `a window full of speech cannot raise the gate past the ceiling`() {
         val vad = detector()
 
-        measured(vad, SPEECH_AMPLITUDE)
+        measured(vad, SPEECH_AMPLITUDE, frames = 50)
 
-        assertEquals(VadConfig().maxSpeechRmsThreshold, vad.speechRmsThreshold, 0f)
+        assertEquals(VadConfig.MIN_SPEECH_RMS, vad.speechRmsThreshold, 0f)
         assertTrue(
             "normal speech must still pass the highest gate calibration may produce",
             vad.isSpeech(audioFrame(SPEECH_AMPLITUDE)),
@@ -95,13 +95,41 @@ class EnergyVadCalibrationTest {
         val vad = detector()
 
         // Even a shout is unmeasurable during the window: there is no gate to judge it by.
-        // 14 of the 15 frames: the window closes on the fifteenth.
+        // Speech energy is kept out of the room estimate; it stays buffered until the
+        // bounded calibration window has enough room samples or reaches its one-second cap.
         repeat(14) { assertFalse(vad.isSpeech(audioFrame(SPEECH_AMPLITUDE))) }
         assertFalse(vad.isCalibrated)
 
-        // The frame that closes the window is judged by the measured gate.
-        assertTrue(vad.isSpeech(audioFrame(SPEECH_AMPLITUDE)))
+        repeat(36) { assertFalse(vad.isSpeech(audioFrame(SPEECH_AMPLITUDE))) }
         assertTrue(vad.isCalibrated)
+        assertTrue(vad.classifyCalibrated(audioFrame(SPEECH_AMPLITUDE)))
+    }
+
+    @Test
+    fun `startup zeroes do not become the measured room floor`() {
+        val vad = detector()
+
+        repeat(15) { vad.isSpeech(audioFrame(0)) }
+        assertFalse(vad.isCalibrated)
+        repeat(4) { vad.isSpeech(audioFrame(roomToneAmplitude)) }
+
+        assertTrue(vad.isCalibrated)
+        assertTrue("room tone after startup zeroes must raise the gate", vad.speechRmsThreshold > 0.001f)
+        assertFalse(vad.classifyCalibrated(audioFrame(roomToneAmplitude)))
+        assertTrue(vad.classifyCalibrated(audioFrame(SPEECH_AMPLITUDE)))
+    }
+
+    @Test
+    fun `speech onset levels do not set the room floor`() {
+        val vad = detector()
+
+        repeat(VadConfig().calibrationFrames) { vad.isSpeech(audioFrame(SPEECH_AMPLITUDE)) }
+        assertFalse("speech at startup must remain buffered", vad.isCalibrated)
+        repeat(50 - VadConfig().calibrationFrames) { vad.isSpeech(audioFrame(SPEECH_AMPLITUDE)) }
+
+        assertTrue("calibration remains bounded to one second", vad.isCalibrated)
+        assertEquals(VadConfig.MIN_SPEECH_RMS, vad.speechRmsThreshold, 0f)
+        assertTrue(vad.classifyCalibrated(audioFrame(SPEECH_AMPLITUDE)))
     }
 
     @Test

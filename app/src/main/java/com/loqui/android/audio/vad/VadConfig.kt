@@ -22,11 +22,9 @@ package com.loqui.android.audio.vad
  *   window that is nothing but speech must not raise the gate above normal speech.
  * @param noiseFloorMultiplier how far above the measured floor speech has to sit. Room
  *   tone wobbles frame to frame; 2x clears the wobble without demanding a loud voice.
- * @param calibrationMs length of the opening window used to measure the floor. 300 ms is
- *   the shortest window whose 20th percentile still comes from quiet frames only (4 of 15)
- *   rather than from the speaker's own first word. Every frame inside the window is
- *   withheld from the recogniser, so the window is also the dead air in front of the first
- *   word: 300 ms, and 200 ms less than the half second it replaces. `0` disables
+ * @param calibrationMs nominal opening room window. It can extend to one second when
+ *   AudioRecord starts with zeroes or speech instead of usable room samples; the bounded
+ *   pre-roll keeps those frames and replays them once the gate is set. `0` disables
  *   calibration (the gate stays at [minSpeechRmsThreshold]).
  * @param onsetFrames consecutive speech frames needed before an utterance starts;
  *   filters single-frame clicks and key taps.
@@ -36,8 +34,9 @@ package com.loqui.android.audio.vad
  *   asks whether the frame is *this much* quieter than the loudest part of what it is
  *   currently transcribing. `0.05` is roughly 26 dB down from the peak — a vowel's tail and
  *   a held breath fall below it, a soft word does not.
- * @param silenceHangoverFrames consecutive silent frames that end the utterance;
- *   1,500 ms (75 frames) preserves pauses inside a sentence and still closes promptly
+ * @param silenceHangoverFrames silent-frame budget that ends the utterance; brief speech
+ *   bursts shorter than [onsetFrames] do not reset it. 1,500 ms (75 frames) preserves
+ *   pauses inside a sentence and still closes promptly
  * @param maxUtteranceMs hard ceiling so one utterance cannot hang a session; a monologue
  *   is cut at 10 s and whatever was captured still reaches the recogniser.
  * @param noSpeechTimeoutMs how long a session may wait for the first confirmed speech

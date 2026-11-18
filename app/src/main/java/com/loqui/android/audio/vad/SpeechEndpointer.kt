@@ -51,13 +51,15 @@ class SpeechEndpointer @Inject constructor(
             // upstream capture flow, which releases the microphone.
             Timber.d(
                 "Utterance closed by %s after %d frames (%d ms), %d in the utterance; " +
-                    "%d ms consecutive silence",
+                    "%d ms hangover budget, %d ms consecutive VAD silence",
                 session.endReason,
                 session.framesSeen,
                 session.framesSeen * config.frameDurationMs,
                 session.utteranceFrames,
+                session.hangoverSilenceMs,
                 session.consecutiveSilenceMs,
             )
+            session.levelDiagnostics?.let { Timber.d("VAD endpoint levels: %s", it) }
         }
     }
 }
@@ -70,7 +72,7 @@ internal enum class EndpointReason {
     /** No frame reached the speech gate before [VadConfig.noSpeechTimeoutFrames]. */
     NO_SPEECH_TIMEOUT,
 
-    /** [VadConfig.silenceHangoverFrames] consecutive frames fell below the gate. */
+    /** The silent-frame budget reached [VadConfig.silenceHangoverFrames]. */
     SILENCE_HANGOVER,
 
     /** The utterance reached [VadConfig.maxUtteranceFrames] and was cut short. */
@@ -92,7 +94,9 @@ private class Segmentation(
     private val pending = ArrayList<AudioFrame>(config.onsetFrames)
     private var onsetCount = 0
     private var started = false
-    private var trailingSilenceFrames = 0
+    private var hangoverBudgetFrames = 0
+    private var consecutiveVadSilenceFrames = 0
+    private var speechResumptionFrames = 0
 
     /** Frames this segment has looked at, including the ones it dropped. */
     var framesSeen = 0
@@ -109,7 +113,24 @@ private class Segmentation(
         private set
 
     val consecutiveSilenceMs: Int
-        get() = trailingSilenceFrames * config.frameDurationMs
+        get() = consecutiveVadSilenceFrames * config.frameDurationMs
+
+    val hangoverSilenceMs: Int
+        get() = hangoverBudgetFrames * config.frameDurationMs
+
+    val levelDiagnostics: String?
+        get() = (detector as? EnergyVad)?.let {
+            (
+                "last RMS %.5f, noise floor %.5f, absolute gate %.5f, relative gate %.5f, " +
+                    "classified speech %s"
+                ).format(
+                    it.lastFrameRms,
+                    it.noiseFloorRms,
+                    it.speechRmsThreshold,
+                    it.peakSpeechRms * config.relativeSilenceFactor,
+                    it.lastFrameWasSpeech,
+                )
+        }
 
     init {
         detector.reset()
@@ -117,9 +138,38 @@ private class Segmentation(
 
     /** @return frames that became part of the utterance because of [frame]. */
     fun accept(frame: AudioFrame): List<AudioFrame> {
-        val speech = detector.isSpeech(frame)
         framesSeen++
 
+        if (!started) {
+            val wasCalibrating = !detector.isCalibrated
+            val speech = detector.isSpeech(frame)
+            if (wasCalibrating) {
+                calibrationPreroll += frame
+                if (!detector.isCalibrated) return emptyList()
+
+                // AudioRecord can begin with zero-filled buffers. Retain the bounded
+                // calibration window, then classify it once with the measured room gate.
+                val buffered = calibrationPreroll.toList()
+                calibrationPreroll.clear()
+                val emitted = ArrayList<AudioFrame>()
+                for (bufferedFrame in buffered) {
+                    if (isComplete) break
+                    emitted += acceptClassified(
+                        bufferedFrame,
+                        detector.classifyCalibrated(bufferedFrame),
+                    )
+                }
+                return emitted
+            }
+            return acceptClassified(frame, speech)
+        }
+
+        return acceptClassified(frame, detector.isSpeech(frame))
+    }
+
+    private val calibrationPreroll = ArrayList<AudioFrame>(MAX_CALIBRATION_FRAMES)
+
+    private fun acceptClassified(frame: AudioFrame, speech: Boolean): List<AudioFrame> {
         if (!started) {
             if (!speech) {
                 pending.clear()
@@ -130,7 +180,7 @@ private class Segmentation(
                 if (onsetCount >= config.onsetFrames) {
                     started = true
                     utteranceFrames = pending.size
-                    trailingSilenceFrames = 0
+                    hangoverBudgetFrames = 0
                     val onset = ArrayList(pending)
                     pending.clear()
                     return onset
@@ -146,9 +196,28 @@ private class Segmentation(
         }
 
         utteranceFrames++
-        trailingSilenceFrames = if (speech) 0 else trailingSilenceFrames + 1
+        consecutiveVadSilenceFrames = if (speech) 0 else consecutiveVadSilenceFrames + 1
+        val confirmedResumption = when {
+            !speech -> {
+                speechResumptionFrames = 0
+                false
+            }
 
-        if (trailingSilenceFrames >= config.silenceHangoverFrames) {
+            hangoverBudgetFrames == 0 -> true
+
+            else -> {
+                speechResumptionFrames++
+                if (speechResumptionFrames >= config.onsetFrames) {
+                    speechResumptionFrames = 0
+                    true
+                } else {
+                    false
+                }
+            }
+        }
+        hangoverBudgetFrames = if (confirmedResumption) 0 else hangoverBudgetFrames + 1
+
+        if (hangoverBudgetFrames >= config.silenceHangoverFrames) {
             complete(EndpointReason.SILENCE_HANGOVER)
         } else if (utteranceFrames >= config.maxUtteranceFrames) {
             complete(EndpointReason.MAX_DURATION)
@@ -159,6 +228,10 @@ private class Segmentation(
     private fun complete(reason: EndpointReason) {
         isComplete = true
         endReason = reason
+    }
+
+    private companion object {
+        const val MAX_CALIBRATION_FRAMES = 50
     }
 }
 

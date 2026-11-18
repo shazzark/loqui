@@ -64,6 +64,43 @@ class SpeechEndpointerTest {
     }
 
     @Test
+    fun `calibration preserves immediate speech once in original order`() = runTest {
+        val input = List(15) { audioFrame(0) } + speech(40) + silence(5)
+
+        val emitted = endpointer(VadConfig(onsetFrames = 3, silenceHangoverFrames = 5))
+            .segment(input.asFlow())
+            .toList()
+
+        // The first voiced frames are replayed from calibration, then the onset confirms.
+        // No frame is duplicated, reordered, or lost at the calibration edge.
+        assertEquals(40 + 5, emitted.size)
+        assertEquals(
+            (speech(40) + silence(5)).map { it.pcm16.toList() },
+            emitted.map { it.pcm16.toList() },
+        )
+    }
+
+    @Test
+    fun `zero startup buffers then room tone still closes after silence hangover`() = runTest {
+        val shipping = VadConfig()
+        val input = List(15) { audioFrame(0) } +
+            List(4) { audioFrame(33) } +
+            speech(3) +
+            List(shipping.silenceHangoverFrames + 10) { audioFrame(33) }
+
+        val emitted = SpeechEndpointer(shipping, EnergyVad(shipping))
+            .segment(input.asFlow())
+            .toList()
+
+        assertEquals(3 + shipping.silenceHangoverFrames, emitted.size)
+        assertEquals(
+            (speech(3) + List(shipping.silenceHangoverFrames) { audioFrame(33) })
+                .map { it.pcm16.toList() },
+            emitted.map { it.pcm16.toList() },
+        )
+    }
+
+    @Test
     fun `the endpoint stops pulling audio from the microphone`() = runTest {
         var pulled = 0
         val microphone = flow {
@@ -162,6 +199,28 @@ class SpeechEndpointerTest {
         assertEquals(78, emitted.size)
         assertEquals(93, pulled)
         assertEquals(1_500, shipping.silenceHangoverFrames * shipping.frameDurationMs)
+    }
+
+    @Test
+    fun `brief room noise spikes do not restart the silence hangover`() = runTest {
+        val shipping = VadConfig(calibrationMs = 0)
+        val roomWithTransientSpikes = List(100) { index ->
+            if (index > 0 && index % 25 == 0) audioFrame(400) else audioFrame(QUIET_AMPLITUDE)
+        }
+        var pulled = 0
+        val microphone = flow {
+            (speech(3) + roomWithTransientSpikes).forEach {
+                pulled++
+                emit(it)
+            }
+        }
+
+        val emitted = SpeechEndpointer(shipping, EnergyVad(shipping))
+            .segment(microphone)
+            .toList()
+
+        assertEquals(3 + shipping.silenceHangoverFrames, emitted.size)
+        assertEquals(3 + shipping.silenceHangoverFrames, pulled)
     }
 
     @Test

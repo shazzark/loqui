@@ -12,9 +12,11 @@ import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
+import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
+import com.loqui.android.BuildConfig
 import com.loqui.android.MainActivity
 import com.loqui.android.R
 import com.loqui.android.asr.AsrCoordinator
@@ -276,6 +278,7 @@ class VoiceInputService : Service() {
         val correction = llmCoordinator.correctIfEnabled(transcript)
         logCorrection(transcript, correction)
 
+        logInsertionText(correction.text)
         val result = textInserter.insert(correction.text)
         publish(
             when (result) {
@@ -293,6 +296,13 @@ class VoiceInputService : Service() {
             Timber.d("Clean-up applied (%d -> %d chars)", transcript.length, correction.text.length)
         } else {
             Timber.d("Clean-up skipped (%s); inserting the raw transcript", correction.skipped)
+        }
+    }
+
+    /** Transcript contents are emitted only in an opted-in debug build. */
+    private fun logInsertionText(text: String) {
+        if (BuildConfig.DEBUG && Log.isLoggable(TRANSCRIPT_LOG_TAG, Log.DEBUG)) {
+            Timber.tag(TRANSCRIPT_LOG_TAG).d("Insertion: %s", text)
         }
     }
 
@@ -496,6 +506,8 @@ class VoiceInputService : Service() {
          * covers a slow `armeabi-v7a` device without leaving the bubble spinning.
          */
         private const val FLUSH_TIMEOUT_MS = 3_000L
+
+        private const val TRANSCRIPT_LOG_TAG = "LoquiTranscript"
 
         /**
          * Starts a dictation session; the service owns the microphone itself.
