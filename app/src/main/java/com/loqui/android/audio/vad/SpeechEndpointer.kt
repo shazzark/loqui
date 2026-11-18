@@ -91,7 +91,7 @@ private class Segmentation(
     private val detector: VoiceActivityDetector,
 ) {
 
-    private val pending = ArrayList<AudioFrame>(config.onsetFrames)
+    private val preSpeech = ArrayList<AudioFrame>(PRE_SPEECH_PREROLL_FRAMES)
     private var onsetCount = 0
     private var started = false
     private var hangoverBudgetFrames = 0
@@ -171,18 +171,21 @@ private class Segmentation(
 
     private fun acceptClassified(frame: AudioFrame, speech: Boolean): List<AudioFrame> {
         if (!started) {
+            if (detector.isPreRollCandidate(frame, speech)) {
+                preSpeech += frame
+                if (preSpeech.size > PRE_SPEECH_PREROLL_FRAMES) preSpeech.removeAt(0)
+            }
+
             if (!speech) {
-                pending.clear()
                 onsetCount = 0
             } else {
-                pending += frame
                 onsetCount++
                 if (onsetCount >= config.onsetFrames) {
                     started = true
-                    utteranceFrames = pending.size
+                    utteranceFrames = preSpeech.size
                     hangoverBudgetFrames = 0
-                    val onset = ArrayList(pending)
-                    pending.clear()
+                    val onset = ArrayList(preSpeech)
+                    preSpeech.clear()
                     return onset
                 }
             }
@@ -232,6 +235,7 @@ private class Segmentation(
 
     private companion object {
         const val MAX_CALIBRATION_FRAMES = 50
+        const val PRE_SPEECH_PREROLL_FRAMES = 50
     }
 }
 

@@ -92,9 +92,10 @@ class SpeechEndpointerTest {
             .segment(input.asFlow())
             .toList()
 
-        assertEquals(3 + shipping.silenceHangoverFrames, emitted.size)
+        assertEquals(4 + 3 + shipping.silenceHangoverFrames, emitted.size)
         assertEquals(
-            (speech(3) + List(shipping.silenceHangoverFrames) { audioFrame(33) })
+            (List(4) { audioFrame(33) } + speech(3) +
+                List(shipping.silenceHangoverFrames) { audioFrame(33) })
                 .map { it.pcm16.toList() },
             emitted.map { it.pcm16.toList() },
         )

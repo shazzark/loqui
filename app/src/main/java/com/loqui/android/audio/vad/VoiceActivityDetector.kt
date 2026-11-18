@@ -20,6 +20,10 @@ interface VoiceActivityDetector {
 
     fun isSpeech(frame: AudioFrame): Boolean
 
+    /** Keeps quieter onset audio that the calibrated gate may initially reject. */
+    fun isPreRollCandidate(frame: AudioFrame, classifiedSpeech: Boolean): Boolean =
+        classifiedSpeech
+
     /** Re-evaluates buffered frames after calibration without adding them twice. */
     fun classifyCalibrated(frame: AudioFrame): Boolean = isSpeech(frame)
 }
@@ -29,7 +33,7 @@ interface VoiceActivityDetector {
  *
  * The opening [VadConfig.calibrationFrames] frames are sampled for room tone. Only levels
  * up to [MAX_ROOM_CALIBRATION_RMS] count: louder frames may be the user's first words.
- * If fewer than four room-level frames arrive, calibration extends to
+ * If fewer than twelve room-level frames arrive, calibration extends to
  * [MAX_CALIBRATION_FRAMES] frames (one second), then uses the fallback floor if no room
  * sample arrived. The endpointer retains and classifies every frame in that window once
  * the gate is known. The quiet fifth of accepted room samples becomes the noise floor and
@@ -37,9 +41,10 @@ interface VoiceActivityDetector {
  * capped at [VadConfig.maxSpeechRmsThreshold]. No frame is reported as speech while
  * calibration is open, so an unmeasured room cannot open an utterance.
  *
- * The 20th percentile resists brief noises in the measurement window. Four qualifying
- * frames are enough to finish the nominal window; zero-filled startup buffers and speech
- * levels do not count as room measurements.
+ * The 20th percentile resists brief noises in a representative window. At least twelve
+ * qualifying samples are required for that estimate; if the one-second cap arrives with
+ * fewer, use their median so one quiet startup frame cannot set the floor. Zero-filled
+ * buffers and speech levels do not count as room readings.
  *
  * The absolute gate is only half of the decision. A gate sits where the room is, and a
  * talker who leans back or trails off mid-sentence lands in the band between the room and
@@ -119,6 +124,15 @@ class EnergyVad(
         return classify(rms)
     }
 
+    override fun isPreRollCandidate(frame: AudioFrame, classifiedSpeech: Boolean): Boolean {
+        if (config.calibrationFrames == 0) return classifiedSpeech
+        val preRollGate = maxOf(
+            noiseFloorRms * PRE_ROLL_NOISE_FLOOR_FACTOR,
+            config.minSpeechRmsThreshold * PRE_ROLL_MIN_GATE_FACTOR,
+        )
+        return Pcm16Signal.rms(frame.pcm16) > preRollGate
+    }
+
     private fun classify(rms: Float): Boolean {
         lastFrameWasSpeech = false
         if (rms < speechRmsThreshold) return false
@@ -150,9 +164,15 @@ class EnergyVad(
         val sorted = calibrationWindow.take(calibratedFrames)
             .filter { it in MIN_ROOM_CALIBRATION_RMS..MAX_ROOM_CALIBRATION_RMS }
             .sorted()
-        // The 20th percentile: the quiet part of the room, not the middle of the window
-        // and not an average the speaker's own voice would dominate.
-        noiseFloorRms = sorted.getOrNull(sorted.size / 5) ?: FALLBACK_NOISE_FLOOR
+        // A full set uses the quiet 20th percentile to resist brief noises; a sparse
+        // one at the calibration cap uses its median instead of trusting a single low
+        // startup reading. Zero usable room frames use the conservative fallback.
+        val floorIndex = if (roomCalibrationFrames >= MIN_ROOM_CALIBRATION_FRAMES) {
+            sorted.size / 5
+        } else {
+            sorted.size / 2
+        }
+        noiseFloorRms = sorted.getOrNull(floorIndex) ?: FALLBACK_NOISE_FLOOR
         speechRmsThreshold = (noiseFloorRms * config.noiseFloorMultiplier).coerceIn(
             config.minSpeechRmsThreshold,
             config.maxSpeechRmsThreshold,
@@ -161,9 +181,10 @@ class EnergyVad(
         // a floor near the old gate means the onset used to trip on room tone, a gate
         // above the speech RMS means it used to hear nothing.
         Timber.d(
-            "VAD calibrated on %d frames (%d ms): noise floor %.5f, speech gate %.5f",
+            "VAD calibrated on %d frames (%d ms, %d room samples): noise floor %.5f, speech gate %.5f",
             calibratedFrames,
             calibratedFrames * config.frameDurationMs,
+            roomCalibrationFrames,
             noiseFloorRms,
             speechRmsThreshold,
         )
@@ -171,9 +192,11 @@ class EnergyVad(
 
     private companion object {
         const val MAX_CALIBRATION_FRAMES = 50
-        const val MIN_ROOM_CALIBRATION_FRAMES = 4
+        const val MIN_ROOM_CALIBRATION_FRAMES = 12
         const val MIN_ROOM_CALIBRATION_RMS = 0.000001f
-        const val MAX_ROOM_CALIBRATION_RMS = 0.002f
+        const val MAX_ROOM_CALIBRATION_RMS = 0.01f
+        const val PRE_ROLL_NOISE_FLOOR_FACTOR = 0.25f
+        const val PRE_ROLL_MIN_GATE_FACTOR = 0.25f
         /**
          * -84 dBFS: what a gate falls back to before calibration and when calibration is
          * disabled. Low enough that nothing a microphone delivers can hide under it.

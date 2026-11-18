@@ -60,6 +60,17 @@ class EnergyVadCalibrationTest {
     }
 
     @Test
+    fun `galaxy microphone room levels above the old fallback do not open speech`() = runTest {
+        val config = VadConfig(noSpeechTimeoutMs = 1_000)
+        val endpointer = SpeechEndpointer(config, EnergyVad(config))
+        val roomTone = List(100) { index -> audioFrame(if (index % 2 == 0) 120 else 220) }
+
+        val emitted = endpointer.segment(roomTone.asFlow()).toList()
+
+        assertTrue("measured room tone must not reach ASR", emitted.isEmpty())
+    }
+
+    @Test
     fun `a window full of speech cannot raise the gate past the ceiling`() {
         val vad = detector()
 
@@ -73,16 +84,17 @@ class EnergyVadCalibrationTest {
     }
 
     @Test
-    fun `a few frames of room tone are enough when the user starts talking at once`() {
+    fun `speech during sparse calibration remains buffered to the one second bound`() {
         val vad = detector()
 
-        // 120 ms of room tone, then the user is already mid-sentence.
+        // A few room samples cannot represent the noise floor. Keep the user's speech
+        // buffered until the one-second calibration cap instead of locking a low gate.
         measured(vad, roomToneAmplitude, frames = 6)
-        measured(vad, SPEECH_AMPLITUDE, frames = 19)
+        measured(vad, SPEECH_AMPLITUDE, frames = 44)
 
         assertTrue(vad.isCalibrated)
-        // 0.001007 x 2, measured from the quiet frames at the head of the window and not
-        // from the 9 frames of speech that follow them.
+        // 0.001007 x 2, measured from the quiet frames at the head of the window; the
+        // louder speech frames are rejected as room measurements.
         assertEquals(0.002f, vad.speechRmsThreshold, 1e-4f)
         assertTrue(
             "speech must still pass a gate measured out of a window it dominated",
@@ -113,10 +125,27 @@ class EnergyVadCalibrationTest {
         assertFalse(vad.isCalibrated)
         repeat(4) { vad.isSpeech(audioFrame(roomToneAmplitude)) }
 
+        assertFalse("four readings must not lock a noisy room gate", vad.isCalibrated)
+        repeat(8) { vad.isSpeech(audioFrame(roomToneAmplitude)) }
+
         assertTrue(vad.isCalibrated)
         assertTrue("room tone after startup zeroes must raise the gate", vad.speechRmsThreshold > 0.001f)
         assertFalse(vad.classifyCalibrated(audioFrame(roomToneAmplitude)))
         assertTrue(vad.classifyCalibrated(audioFrame(SPEECH_AMPLITUDE)))
+    }
+
+    @Test
+    fun `sparse room samples at the calibration cap use their median`() {
+        val vad = detector()
+
+        repeat(15) { vad.isSpeech(audioFrame(0)) }
+        vad.isSpeech(audioFrame(120))
+        vad.isSpeech(audioFrame(220))
+        repeat(33) { vad.isSpeech(audioFrame(SPEECH_AMPLITUDE)) }
+
+        assertTrue("calibration must stop at one second", vad.isCalibrated)
+        assertEquals(220 / 32_768f, vad.noiseFloorRms, 1e-6f)
+        assertFalse("a lower startup reading must not dominate sparse room data", vad.isSpeech(audioFrame(120)))
     }
 
     @Test
@@ -130,6 +159,45 @@ class EnergyVadCalibrationTest {
         assertTrue("calibration remains bounded to one second", vad.isCalibrated)
         assertEquals(VadConfig.MIN_SPEECH_RMS, vad.speechRmsThreshold, 0f)
         assertTrue(vad.classifyCalibrated(audioFrame(SPEECH_AMPLITUDE)))
+    }
+
+    @Test
+    fun `quiet speech just below the gate is retained until onset confirms`() = runTest {
+        val config = VadConfig(onsetFrames = 3, silenceHangoverFrames = 5)
+        val earlySpeech = List(4) { audioFrame(50) }
+        val louderSpeech = List(3) { audioFrame(SPEECH_AMPLITUDE) }
+        val endpointer = SpeechEndpointer(config, EnergyVad(config))
+        val input = List(15) { audioFrame(roomToneAmplitude) } +
+            earlySpeech + louderSpeech + List(5) { audioFrame(QUIET_AMPLITUDE) }
+
+        val emitted = endpointer.segment(input.asFlow()).toList()
+
+        assertEquals(
+            (List(15) { audioFrame(roomToneAmplitude) } + earlySpeech + louderSpeech +
+                List(5) { audioFrame(QUIET_AMPLITUDE) })
+                .map { it.pcm16.toList() },
+            emitted.map { it.pcm16.toList() },
+        )
+    }
+
+    @Test
+    fun `speech included in room calibration is replayed before the louder onset`() = runTest {
+        val config = VadConfig(onsetFrames = 3, silenceHangoverFrames = 5)
+        val calibrationSpeech = List(15) { audioFrame(150) }
+        val quietOpening = List(4) { audioFrame(100) }
+        val confirmation = List(3) { audioFrame(SPEECH_AMPLITUDE) }
+        val trailingSilence = List(5) { audioFrame(QUIET_AMPLITUDE) }
+        val endpointer = SpeechEndpointer(config, EnergyVad(config))
+
+        val emitted = endpointer.segment(
+            (calibrationSpeech + quietOpening + confirmation + trailingSilence).asFlow(),
+        ).toList()
+
+        assertEquals(
+            (calibrationSpeech + quietOpening + confirmation + trailingSilence)
+                .map { it.pcm16.toList() },
+            emitted.map { it.pcm16.toList() },
+        )
     }
 
     @Test
