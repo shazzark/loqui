@@ -64,9 +64,9 @@ object DispatchersModule {
 object AudioModule {
 
     /**
-     * Endpointing defaults: 20 ms frames, 60 ms of speech to start an utterance, 600 ms of
+     * Endpointing defaults: 20 ms frames, 60 ms of speech to start an utterance, 1,500 ms of
      * silence to end it, and a 300 ms opening window in which the detector measures the
-     * room before it decides what speech is. A frame also has to stay within a sixth of the
+     * room before it decides what speech is. A frame also has to stay within five percent of the
      * utterance's own peak RMS to count as speech, so trailing off ends the utterance even
      * when the room gate still hears it.
      */

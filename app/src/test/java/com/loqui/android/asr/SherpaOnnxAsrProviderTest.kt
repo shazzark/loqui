@@ -6,8 +6,10 @@ import com.loqui.android.models.SpeechModel
 import com.loqui.android.models.SpeechModelRepository
 import com.loqui.android.models.SpeechModels
 import java.io.File
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.test.runTest
@@ -92,15 +94,20 @@ class SherpaOnnxAsrProviderTest {
             listOf(
                 AsrEvent.Partial("hello 2"),
                 AsrEvent.Partial("hello 4"),
-                AsrEvent.Final("hello 4"),
+                AsrEvent.Final("hello 4804"),
             ),
             events,
         )
-        assertEquals(4, engine.session.acceptedSamples)
+        assertEquals(4_804, engine.session.acceptedSamples)
+        assertEquals(listOf(2, 2, 4_800), engine.session.acceptSizes)
         assertEquals(AudioFrame.SAMPLE_RATE_HZ, engine.session.sampleRateHz)
         assertTrue(engine.session.finished)
+        assertEquals(1, engine.session.finishCount)
         assertTrue(engine.session.released)
         assertEquals(paths, engine.openedPaths)
+        assertTrue(engine.session.events.indexOf("accept:4_800") < engine.session.events.indexOf("finish"))
+        assertTrue(engine.session.events.indexOf("finish") < engine.session.events.lastIndexOf("decode"))
+        assertTrue(engine.session.events.lastIndexOf("decode") < engine.session.events.lastIndexOf("text"))
     }
 
     @Test
@@ -125,6 +132,28 @@ class SherpaOnnxAsrProviderTest {
             listOf(AsrEvent.Failure(AsrFailure.NO_SPEECH)),
             provider.transcribe(flowOf(frame(2))).toList(),
         )
+    }
+
+    @Test
+    fun `cancellation releases the stream without padding or finishing it`() = runTest {
+        val engine = FakeEngine()
+        val provider = provider(paths = paths, engine = engine)
+        val audio = flow {
+            emit(frame(2))
+            throw CancellationException("user cancelled")
+        }
+
+        var cancelled = false
+        try {
+            provider.transcribe(audio).toList()
+        } catch (_: CancellationException) {
+            cancelled = true
+        }
+
+        assertTrue(cancelled)
+        assertEquals(listOf(2), engine.session.acceptSizes)
+        assertEquals(0, engine.session.finishCount)
+        assertTrue(engine.session.released)
     }
 
     @Test
@@ -272,12 +301,18 @@ class SherpaOnnxAsrProviderTest {
         var acceptedSamples = 0
         var sampleRateHz = 0
         var finished = false
+        var finishCount = 0
         var released = false
+        val acceptSizes = mutableListOf<Int>()
+        val events = mutableListOf<String>()
 
         private var pending = false
         private var text = ""
 
         override fun accept(samples: FloatArray, sampleRateHz: Int) {
+            events += "accept:${samples.size}"
+            if (samples.size == 4_800) assertTrue(samples.all { it == 0f })
+            acceptSizes += samples.size
             if (failOnAccept) throw IllegalStateException("decode exploded")
             acceptedSamples += samples.size
             this.sampleRateHz = sampleRateHz
@@ -291,13 +326,19 @@ class SherpaOnnxAsrProviderTest {
         override fun isReady(): Boolean = pending
 
         override fun decode() {
+            events += "decode"
             pending = false
         }
 
-        override fun text(): String = text
+        override fun text(): String {
+            events += "text"
+            return text
+        }
 
         override fun finish() {
+            events += "finish"
             finished = true
+            finishCount++
             if (emptyTail) text = ""
             pending = text.isNotEmpty()
         }

@@ -1,5 +1,7 @@
 package com.loqui.android.asr
 
+import android.util.Log
+import com.loqui.android.BuildConfig
 import com.loqui.android.audio.vad.Pcm16Signal
 import com.loqui.android.di.IoDispatcher
 import com.loqui.android.models.ModelFile
@@ -185,6 +187,7 @@ class SherpaOnnxAsrProvider @Inject constructor(
                             frames,
                             text.length,
                         )
+                        logTranscript("Partial", text)
                         emit(AsrEvent.Partial(text))
                     }
                 }
@@ -205,6 +208,8 @@ class SherpaOnnxAsrProvider @Inject constructor(
                     return@withLock
                 }
 
+                // Give streaming Zipformer terminal acoustic context before signalling EOF.
+                session.accept(FINAL_PADDING, AudioFrame.SAMPLE_RATE_HZ)
                 session.finish()
                 val tail = drain(session).trim()
 
@@ -240,6 +245,7 @@ class SherpaOnnxAsrProvider @Inject constructor(
                         frames,
                         millisFor(samples),
                     )
+                    logTranscript("Final", finalText)
                     emit(AsrEvent.Final(finalText))
                 }
             } catch (cancellation: CancellationException) {
@@ -272,6 +278,13 @@ class SherpaOnnxAsrProvider @Inject constructor(
     }.flowOn(ioDispatcher)
 
     private fun millisFor(samples: Long): Long = samples * 1_000L / AudioFrame.SAMPLE_RATE_HZ
+
+    /** Transcript text is available only in explicitly enabled debug builds. */
+    private fun logTranscript(kind: String, text: String) {
+        if (BuildConfig.DEBUG && Log.isLoggable(TRANSCRIPT_LOG_TAG, Log.DEBUG)) {
+            Timber.tag(TRANSCRIPT_LOG_TAG).d("%s: %s", kind, text)
+        }
+    }
 
     private fun drain(session: StreamingAsrSession): String {
         while (session.isReady()) {
@@ -332,6 +345,12 @@ class SherpaOnnxAsrProvider @Inject constructor(
     private companion object {
         /** One diagnostic line per second of audio (50 frames of 20 ms). */
         const val LOG_EVERY_FRAMES = 50
+
+        /** Set `log.tag.LoquiTranscript=DEBUG` on a debuggable build to opt in. */
+        const val TRANSCRIPT_LOG_TAG = "LoquiTranscript"
+
+        /** 300 ms of terminal context for streaming decoders at 16 kHz. */
+        val FINAL_PADDING = FloatArray(AudioFrame.SAMPLE_RATE_HZ * 300 / 1_000)
 
         const val MB = 1024L * 1024L
     }

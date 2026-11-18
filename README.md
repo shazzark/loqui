@@ -41,7 +41,7 @@ that is a bug.
 | Microphone owner | `capture/VoiceInputService` | `microphone` foreground service; the only recorder |
 | Capture | `audio/AudioCaptureStream` + `audio/AudioRecordPcmSource` | `AudioRecord` 16 kHz mono PCM-16, 20 ms frames, released as soon as collection stops |
 | Ring buffer | `audio/AudioRingBuffer` | Bounded circular buffer between the blocking read and the consumer; drops oldest audio and counts the loss |
-| Endpointing | `audio/vad/SpeechEndpointer` + `audio/vad/EnergyVad` | Gate measured from the first 300 ms of the room (`noiseFloor × 2`, clamped to `0.0005..0.02`) → onset (60 ms) → speech, where a frame must also stay within `0.15 ×` the utterance's own peak RMS → hangover (600 ms) → utterance complete; a session also closes after 8 s without speech and is cut at 10 s, so a mis-tuned gate can never hold the bubble |
+| Endpointing | `audio/vad/SpeechEndpointer` + `audio/vad/EnergyVad` | Gate measured from the first 300 ms of the room (`noiseFloor × 2`, clamped to `0.0005..0.02`) → onset (60 ms) → speech, where a frame must also stay within `0.05 ×` the utterance's own peak RMS → hangover (1,500 ms) → utterance complete; a session also closes after 8 s without speech and is cut at 10 s, so a mis-tuned gate can never hold the bubble |
 | Floating trigger | `trigger/BubbleService` + `BubbleController` | `specialUse` overlay service: draggable disc, tap toggles capture, never records audio or touches the network |
 | Bubble states | `trigger/BubbleAppearance` | Pure mapping `CaptureState` → accent, short label, spinner, pulse; the only `View` code lives in `BubbleController` |
 | Recognition | `asr/AsrCoordinator`, `asr/AsrProviderFactory` | `asr/SherpaOnnxAsrProvider` on-device (sherpa-onnx streaming Zipformer 2023-06-26 int8 `chunk-16-left-128`, or the 20M export on small devices); `asr/cloud/CloudAsrProvider` for opt-in cloud, gated on the user's key |
@@ -155,7 +155,7 @@ On a real device with the debug build (no key, no model):
 2. "Start using Loqui" starts the bubble. Drag it anywhere; it stays over other apps.
 3. Open Chrome, focus the address bar or a text area, tap the bubble.
    - bubble turns red and pulses, label "Listening…"
-   - speak for ~2 s, then stop; after the 600 ms hangover the bubble shows "Working…"
+   - speak for ~2 s, then stop; after the 1,500 ms hangover the bubble shows "Working…"
    - the transcript ("This is a Loqui test transcript.") appears in the field and the
      bubble flashes green "Inserted"
 4. Tap the bubble again while it is listening → the session cancels back to idle.
@@ -425,6 +425,9 @@ model is now a decision, not a constant:
 
 ### Trailing off ends the utterance (2026-11-17)
 
+The settings below describe the behavior at the time of this note; the current defaults are
+listed in the architecture table above.
+
 The energy gate sits where the room is, and a talker who leans back or trails off lands in
 the band between the room tone and the gate: every frame is still louder than the café, so
 the detector calls it speech, the utterance never falls silent, and it runs to the ceiling
@@ -464,7 +467,9 @@ adb logcat -s AudioCaptureStream AudioRecordPcmSource EnergyVad SpeechEndpointer
   when the utterance never started, so a quiet microphone is visible without a second run.
   `, stopped by the user` is appended when the session ended on a tap.
 - `Utterance closed by SILENCE_HANGOVER|MAX_DURATION|NO_SPEECH_TIMEOUT after N frames` —
-  which ceiling ended the session, and how much audio reached the recogniser.
+  which ceiling ended the session, how much audio reached the recogniser, and consecutive
+  silence duration. Transcript text is available only in a debug build after opting in with
+  `adb shell setprop log.tag.LoquiTranscript DEBUG`; release logs never contain transcript text.
 - `Model <dir>: encoder 70108816 B (66.9 MB), decoder 540688 B (0.5 MB), joiner 259416 B
   (0.2 MB), tokens 5048 B (0.0 MB); ABI armv8l; heap max .. MB` — exact bytes prove the four
   installed files are complete (a size the catalogue disagrees with prints `expected N B`,

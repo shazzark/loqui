@@ -129,6 +129,42 @@ class SpeechEndpointerTest {
     }
 
     @Test
+    fun `one second mid-sentence pause preserves later speech and resets silence`() = runTest {
+        val shipping = VadConfig(relativeSilenceFactor = 0.05f)
+        val emitted = endpointer(shipping).segment(
+            (silence(15) + speech(3) + silence(50) + speech(3) + silence(75)).asFlow(),
+        ).toList()
+
+        assertEquals(3 + 50 + 3 + 75, emitted.size)
+    }
+
+    @Test
+    fun `shipping hangover closes after 1500 milliseconds of silence`() = runTest {
+        val shipping = VadConfig()
+        var pulled = 0
+        val microphone = flow {
+            repeat(15) {
+                pulled++
+                emit(audioFrame(QUIET_AMPLITUDE))
+            }
+            repeat(3) {
+                pulled++
+                emit(audioFrame(SPEECH_AMPLITUDE))
+            }
+            repeat(100) {
+                pulled++
+                emit(audioFrame(QUIET_AMPLITUDE))
+            }
+        }
+
+        val emitted = endpointer(shipping).segment(microphone).toList()
+
+        assertEquals(78, emitted.size)
+        assertEquals(93, pulled)
+        assertEquals(1_500, shipping.silenceHangoverFrames * shipping.frameDurationMs)
+    }
+
+    @Test
     fun `the default ceilings are ten seconds of speech and eight without`() {
         val defaults = VadConfig()
 
@@ -138,11 +174,10 @@ class SpeechEndpointerTest {
         assertEquals(500, defaults.maxUtteranceFrames)
         assertEquals(400, defaults.noSpeechTimeoutFrames)
         assertEquals(8_000, defaults.noSpeechTimeoutMs)
-        // 600 ms of hangover: long enough for the pauses inside a sentence, short enough
-        // that the transcript is not left waiting once the user has stopped.
-        assertEquals(30, defaults.silenceHangoverFrames)
-        assertEquals(600, defaults.silenceHangoverFrames * defaults.frameDurationMs)
-        assertEquals(0.15f, defaults.relativeSilenceFactor, 0f)
+        // The 1,500 ms hangover preserves sentence pauses and closes on sustained silence.
+        assertEquals(75, defaults.silenceHangoverFrames)
+        assertEquals(1_500, defaults.silenceHangoverFrames * defaults.frameDurationMs)
+        assertEquals(0.05f, defaults.relativeSilenceFactor, 0f)
         assertTrue(
             "the gate must sit below what a phone mic delivers at arm's length",
             defaults.minSpeechRmsThreshold <= 0.01f,

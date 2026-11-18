@@ -144,9 +144,9 @@ class EnergyVadCalibrationTest {
         )
         assertEquals(SPEECH_AMPLITUDE / 32_768f, vad.peakSpeechRms, 1e-6f)
 
-        // ~0.018 RMS: thirty times the gate and still ten times below the peak. Without the
+        // ~0.003 RMS: above the room gate but below five percent of the peak. Without the
         // relative test this opened a 10 s utterance that transcribed nothing.
-        val trailedOff = audioFrame(600)
+        val trailedOff = audioFrame(100)
         assertTrue(Pcm16Signal.rms(trailedOff.pcm16) > vad.speechRmsThreshold)
         assertFalse("a trailing-off tail must read as silence", vad.isSpeech(trailedOff))
     }

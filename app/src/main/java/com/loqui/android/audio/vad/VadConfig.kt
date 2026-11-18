@@ -34,11 +34,10 @@ package com.loqui.android.audio.vad
  *   before it counts as silence, whatever the absolute gate says. See [EnergyVad]: a gate
  *   measured from room tone cannot tell a pause from a quiet phrase, so the detector also
  *   asks whether the frame is *this much* quieter than the loudest part of what it is
- *   currently transcribing. `0.15` is roughly 16 dB down from the peak — a vowel's tail and
+ *   currently transcribing. `0.05` is roughly 26 dB down from the peak — a vowel's tail and
  *   a held breath fall below it, a soft word does not.
  * @param silenceHangoverFrames consecutive silent frames that end the utterance;
- *   600 ms (30 frames) is long enough for the pauses inside a sentence and short enough
- *   that the transcript is not left waiting after the user stops talking.
+ *   1,500 ms (75 frames) preserves pauses inside a sentence and still closes promptly
  * @param maxUtteranceMs hard ceiling so one utterance cannot hang a session; a monologue
  *   is cut at 10 s and whatever was captured still reaches the recogniser.
  * @param noSpeechTimeoutMs how long a session may wait for the first confirmed speech
@@ -51,10 +50,10 @@ data class VadConfig(
     val minSpeechRmsThreshold: Float = MIN_SPEECH_RMS,
     val maxSpeechRmsThreshold: Float = 0.02f,
     val noiseFloorMultiplier: Float = 2f,
-    val relativeSilenceFactor: Float = 0.15f,
+    val relativeSilenceFactor: Float = 0.05f,
     val calibrationMs: Int = 300,
     val onsetFrames: Int = 3,
-    val silenceHangoverFrames: Int = 30,
+    val silenceHangoverFrames: Int = 75,
     val maxUtteranceMs: Int = 10_000,
     val noSpeechTimeoutMs: Int = 8_000,
 ) {

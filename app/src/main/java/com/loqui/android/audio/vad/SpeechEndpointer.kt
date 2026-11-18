@@ -50,11 +50,13 @@ class SpeechEndpointer @Inject constructor(
             // Expected: the endpoint closed the utterance and cancelled the
             // upstream capture flow, which releases the microphone.
             Timber.d(
-                "Utterance closed by %s after %d frames (%d ms), %d in the utterance",
+                "Utterance closed by %s after %d frames (%d ms), %d in the utterance; " +
+                    "%d ms consecutive silence",
                 session.endReason,
                 session.framesSeen,
                 session.framesSeen * config.frameDurationMs,
                 session.utteranceFrames,
+                session.consecutiveSilenceMs,
             )
         }
     }
@@ -105,6 +107,9 @@ private class Segmentation(
 
     var endReason: EndpointReason? = null
         private set
+
+    val consecutiveSilenceMs: Int
+        get() = trailingSilenceFrames * config.frameDurationMs
 
     init {
         detector.reset()
